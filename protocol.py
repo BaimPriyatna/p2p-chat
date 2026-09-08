@@ -95,6 +95,26 @@ def make_file_done(transfer_id: str, checksum: str) -> dict:
     return {"type": "file_done", "transfer_id": transfer_id, "checksum": checksum}
 
 
+def make_hello(peer_id: str, sender_name: str, tcp_port: int) -> dict:
+    return {
+        "type": "hello",
+        "peer_id": peer_id,
+        "sender_name": sender_name,
+        "tcp_port": tcp_port,
+        "timestamp": time.time(),
+    }
+
+
+def make_hello_ack(peer_id: str, sender_name: str, tcp_port: int) -> dict:
+    return {
+        "type": "hello_ack",
+        "peer_id": peer_id,
+        "sender_name": sender_name,
+        "tcp_port": tcp_port,
+        "timestamp": time.time(),
+    }
+
+
 def encode_message(message: dict) -> bytes:
     """Serialize a message dict into a length-prefixed frame ready to send."""
     payload = json.dumps(message).encode("utf-8")

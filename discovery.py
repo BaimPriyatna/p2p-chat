@@ -75,6 +75,89 @@ class PeerRegistry:
         return self._peers.get(peer_id)
 
 
+def save_identity(peer_id: str, name: str, config_path: str = ".p2pchat_identity.json") -> None:
+    """Persist peer identity to disk."""
+    with open(config_path, "w") as f:
+        json.dump({"peer_id": peer_id, "name": name}, f)
+
+
+def get_broadcast_targets() -> list[str]:
+    """Find all potential IPv4 broadcast and gateway addresses.
+
+    On mobile hotspot tethering (e.g. Android), sending only to 255.255.255.255
+    often fails because the mobile kernel routes 255.255.255.255 over cellular
+    data rather than the Wi-Fi AP interface. Including subnet broadcast
+    (e.g. 10.186.76.255, 192.168.43.255) and the default gateway IP ensures
+    packets reach peers across mobile hotspots and complex LANs.
+    """
+    import struct
+    import subprocess
+
+    targets = {"255.255.255.255"}
+
+    # 1. Parse /proc/net/route on Linux/Android for default gateway
+    try:
+        with open("/proc/net/route", "r") as f:
+            for line in f.readlines()[1:]:
+                fields = line.strip().split()
+                if len(fields) >= 3:
+                    dest, gw = fields[1], fields[2]
+                    if dest == "00000000" and gw != "00000000":
+                        gw_ip = socket.inet_ntoa(struct.pack("<L", int(gw, 16)))
+                        targets.add(gw_ip)
+    except Exception:
+        pass
+
+    # 2. Check `ip` command on Linux / Android Termux for subnet broadcasts
+    try:
+        out = subprocess.check_output(
+            ["ip", "-o", "-f", "inet", "addr", "show"],
+            text=True, stderr=subprocess.DEVNULL, timeout=1.0
+        )
+        for line in out.splitlines():
+            parts = line.split()
+            if "brd" in parts:
+                idx = parts.index("brd")
+                if idx + 1 < len(parts):
+                    targets.add(parts[idx + 1])
+    except Exception:
+        pass
+
+    # 3. Check default gateway from ip route
+    try:
+        out = subprocess.check_output(
+            ["ip", "route", "show", "default"],
+            text=True, stderr=subprocess.DEVNULL, timeout=1.0
+        )
+        for line in out.splitlines():
+            parts = line.split()
+            if "via" in parts:
+                idx = parts.index("via")
+                if idx + 1 < len(parts):
+                    targets.add(parts[idx + 1])
+    except Exception:
+        pass
+
+    return sorted(list(targets))
+
+
+def get_network_info() -> dict:
+    """Return local network diagnostics for peer discovery."""
+    targets = get_broadcast_targets()
+    local_ips = []
+    try:
+        hostname = socket.gethostname()
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            if not ip.startswith("127."):
+                local_ips.append(ip)
+    except Exception:
+        pass
+    return {
+        "local_ips": local_ips,
+        "targets": targets,
+    }
+
+
 def load_or_create_identity(config_path: str = ".p2pchat_identity.json") -> tuple[str, str]:
     """Return (peer_id, name), generating and persisting a UUID on first run.
 
@@ -90,8 +173,7 @@ def load_or_create_identity(config_path: str = ".p2pchat_identity.json") -> tupl
 
     peer_id = str(uuid.uuid4())
     name = socket.gethostname()
-    with open(config_path, "w") as f:
-        json.dump({"peer_id": peer_id, "name": name}, f)
+    save_identity(peer_id, name, config_path)
     return peer_id, name
 
 
@@ -104,6 +186,14 @@ class Discovery:
         self.tcp_port = tcp_port
         self.registry = registry
         self._sock: Optional[socket.socket] = None
+        self._send_sock: Optional[socket.socket] = None
+
+    def _get_send_socket(self) -> socket.socket:
+        if self._send_sock is None:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            self._send_sock = sock
+        return self._send_sock
 
     def _make_broadcast_socket(self) -> socket.socket:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -113,26 +203,51 @@ class Discovery:
         sock.setblocking(False)
         return sock
 
-    async def _announce_loop(self) -> None:
-        send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        send_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        payload = json.dumps({
+    def _build_payload(self, reply: bool = True) -> bytes:
+        return json.dumps({
             "type": "announce",
             "peer_id": self.peer_id,
             "name": self.name,
             "tcp_port": self.tcp_port,
+            "reply": reply,
         }).encode("utf-8")
 
+    def probe_peer(self, ip: str, port: int = BROADCAST_PORT) -> None:
+        """Send an immediate direct announce packet to a specific IP."""
+        payload = self._build_payload(reply=True)
+        try:
+            send_sock = self._get_send_socket()
+            send_sock.sendto(payload, (ip, port))
+        except OSError:
+            pass
+
+    def broadcast_now(self) -> None:
+        """Send an immediate broadcast across all discovered targets."""
+        payload = self._build_payload(reply=True)
+        send_sock = self._get_send_socket()
+        targets = get_broadcast_targets()
+        for target in targets:
+            try:
+                send_sock.sendto(payload, (target, BROADCAST_PORT))
+            except OSError:
+                pass
+
+    async def _announce_loop(self) -> None:
         try:
             while True:
-                try:
-                    send_sock.sendto(payload, ("255.255.255.255", BROADCAST_PORT))
-                except OSError:
-                    # e.g. network temporarily unavailable — skip this cycle
-                    pass
+                targets = get_broadcast_targets()
+                payload = self._build_payload(reply=True)
+                send_sock = self._get_send_socket()
+                for target in targets:
+                    try:
+                        send_sock.sendto(payload, (target, BROADCAST_PORT))
+                    except OSError:
+                        pass
                 await asyncio.sleep(ANNOUNCE_INTERVAL)
         finally:
-            send_sock.close()
+            if self._send_sock:
+                self._send_sock.close()
+                self._send_sock = None
 
     async def _listen_loop(self) -> None:
         self._sock = self._make_broadcast_socket()
@@ -148,7 +263,9 @@ class Discovery:
 
                 self._handle_packet(data, addr)
         finally:
-            self._sock.close()
+            if self._sock:
+                self._sock.close()
+                self._sock = None
 
     def _handle_packet(self, data: bytes, addr: tuple[str, int]) -> None:
         try:
@@ -168,6 +285,16 @@ class Discovery:
             ip=ip,
             tcp_port=msg.get("tcp_port", 0),
         )
+
+        # Bi-directional discovery reply:
+        # If the incoming announce permits replies, immediately send a unicast announce back.
+        # This circumvents AP isolation or broadcast forwarding drops on mobile hotspots.
+        if msg.get("reply", True):
+            reply_payload = self._build_payload(reply=False)
+            try:
+                self._get_send_socket().sendto(reply_payload, (ip, BROADCAST_PORT))
+            except OSError:
+                pass
 
     async def _prune_loop(self) -> None:
         while True:

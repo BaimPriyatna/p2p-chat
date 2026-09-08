@@ -38,27 +38,49 @@ WiFi hotspot) and communicate directly.
 ```bash
 git clone <repo-url>
 cd p2p-chat
-pip install -r requirements.txt
+pip install -e .
 ```
+
+This installs the package and creates the `pchat` command in your environment.
 
 ## Usage
 
+Run directly via the console command:
+
 ```bash
-python3 ui.py
+pchat
 ```
 
+(Or alternately: `python3 ui.py`)
+
 Run this on two or more devices on the same LAN or WiFi hotspot. Peers
-appear automatically in the left panel as they're discovered.
+appear automatically in the left panel as they are discovered.
 
-**Commands** (type into the input box at the bottom):
-- `/msg <name-or-id-prefix>` — switch the active chat target
-- `/send <filepath>` — offer a file to the active peer (they get an
-  accept/reject prompt)
-- `/help` — list commands
+### Mouse & Clipboard
+- **Select / Block Text**: Click and drag your cursor over text in the chat log to block/select it.
+- **Copy**: Press `Ctrl+C` or `Ctrl+Shift+C` to copy the selected text to your system clipboard (supports Wayland `wl-copy`, X11 `xclip`, and terminal OSC 52).
+- **Quit Key**: Press `Ctrl+Q` to quit anytime (or `Ctrl+C` when no text is selected).
+- **Switch Peer**: Click any peer in the left sidebar to switch conversations.
 
-Anything else typed and submitted is sent as a chat message to the active
-peer. Sent messages show a delivery status (`delivered` or `failed`) once
-the peer's acknowledgment comes back or times out.
+### Commands
+
+Type into the bottom input box and hit Enter:
+
+| Command | Description |
+|---|---|
+| `/help` | Show available commands and keyboard shortcuts |
+| `/connect <ip>[:port]` | Connect directly to a peer IP (fixes mobile hotspot / AP isolation) |
+| `/peers` | List all discovered peers with IP, port, and status |
+| `/msg <name\|id>` | Switch the active chat recipient |
+| `/send <filepath>` | Offer a file to the active peer |
+| `/nick <new-name>` | Change your display nickname and announce to network |
+| `/copy [all\|last]` | Copy last chat message or entire log to clipboard |
+| `/clear` | Clear the chat log |
+| `/info` (or `/me`) | Display local identity, IP, gateway, and listening ports |
+| `/quit` (or `/exit`) | Quit `pchat` (or press `Ctrl+Q`) |
+
+Anything else typed is sent as a chat message to the active peer.
+Sent messages show delivery status (`delivered ✓✓` or `failed ✗`).
 
 ## Known Limitations
 

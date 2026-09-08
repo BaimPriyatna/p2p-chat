@@ -3,3 +3,6 @@ __pycache__/
 .p2pchat_identity.json
 venv/
 .venv/
+*.egg-info/
+build/
+dist/

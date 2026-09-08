@@ -4,35 +4,148 @@ ui.py — terminal UI tying discovery, chat, and file_transfer together.
 Layout:
     +------------------+------------------------------+
     | Peers (online)   |  Chat log (active peer)       |
-    |                  |                                |
+    |                  |                               |
     +------------------+------------------------------+
-    | > input box (type text, or /send <path>, /help)   |
-    +-----------------------------------------------------+
+    | > input box (type text, or /send <path>, /help)  |
+    +--------------------------------------------------+
 
 Commands typed into the input box:
+    /help                           show available commands and shortcuts
+    /connect <ip>[:port]            connect directly to peer (hotspot / AP isolation fix)
+    /peers                          list all discovered peers and status
     /msg <peer-name-or-id-prefix>   switch active chat target
     /send <filepath>                offer a file to the active peer
-    /help                           show available commands
-Anything else is sent as a chat message to the currently active peer.
+    /nick <new-name>                change display name and re-announce
+    /copy [last|all]                copy chat to system clipboard
+    /clear                          clear chat log
+    /info or /me                    show local identity and network details
+    /quit or /exit                  quit p2p-chat
 
-Incoming file offers pop up a modal asking accept/reject.
+Cursor & Mouse:
+    - Click and drag text in the chat log to select/block text.
+    - Press Ctrl+C or Ctrl+Shift+C to copy selected text to clipboard.
+    - Ctrl+Q quits immediately.
+    - Click any peer in the sidebar list to switch conversation target.
 """
 
 import asyncio
 import os
+import shutil
+import subprocess
 from typing import Optional
 
+from rich.style import Style
+from textual import events
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
+from textual.selection import Selection
+from textual.strip import Strip
 from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, RichLog
 
 import chat
 import discovery
 import file_transfer
+import protocol
 from peer import ConnectionManager
 
 UI_TCP_PORT = 5656
+
+
+def apply_selection_to_strip(strip: Strip, start: int, end: int, style: Style) -> Strip:
+    """Apply a visual highlight style to a span within a Textual Strip."""
+    cell_len = strip.cell_length
+    if cell_len == 0:
+        return strip
+    if end == -1 or end > cell_len:
+        end = cell_len
+    start = max(0, min(start, cell_len))
+    end = max(0, min(end, cell_len))
+    if start >= end:
+        return strip
+
+    cuts = []
+    if start > 0:
+        cuts.append(start)
+    cuts.append(end)
+    if end < cell_len:
+        cuts.append(cell_len)
+
+    parts = list(strip.divide(cuts))
+    styled_parts = []
+    idx = 0
+    if start > 0:
+        styled_parts.append(parts[idx])
+        idx += 1
+    styled_parts.append(parts[idx].apply_style(style))
+    idx += 1
+    if end < cell_len:
+        styled_parts.append(parts[idx])
+    return Strip.join(styled_parts)
+
+
+class SelectableRichLog(RichLog):
+    """RichLog with native mouse text selection and cursor offset tracking."""
+
+    ALLOW_SELECT = True
+
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
+        """Extract plain text lines under the user's mouse selection."""
+        text = "\n".join(strip.text.rstrip() for strip in self.lines)
+        return selection.extract(text), "\n"
+
+    def render_line(self, y: int) -> Strip:
+        """Render line with selection highlighting and character offset metadata."""
+        scroll_x, scroll_y = self.scroll_offset
+        line_idx = scroll_y + y
+        width = self.scrollable_content_region.width
+
+        if line_idx >= len(self.lines):
+            return Strip.blank(width, self.rich_style)
+
+        base_strip = self.lines[line_idx]
+
+        selection = self.text_selection
+        if selection is not None:
+            span = selection.get_span(line_idx)
+            if span is not None:
+                start, end = span
+                try:
+                    sel_style = self.screen.get_component_rich_style("screen--selection")
+                except Exception:
+                    sel_style = None
+                if not sel_style or (not sel_style.bgcolor and not sel_style.reverse):
+                    sel_style = Style(reverse=True)
+                base_strip = apply_selection_to_strip(base_strip, start, end, sel_style)
+
+        line = base_strip.crop_extend(scroll_x, scroll_x + width, self.rich_style)
+        line = line.apply_offsets(scroll_x, line_idx)
+        return line.apply_style(self.rich_style)
+
+
+def copy_to_system_clipboard(text: str) -> None:
+    """Copy text to system clipboard using Wayland or X11 tools if available."""
+    if shutil.which("wl-copy"):
+        try:
+            proc = subprocess.Popen(["wl-copy"], stdin=subprocess.PIPE)
+            proc.communicate(input=text.encode("utf-8"), timeout=0.5)
+            return
+        except Exception:
+            pass
+    if shutil.which("xclip"):
+        try:
+            proc = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
+            proc.communicate(input=text.encode("utf-8"), timeout=0.5)
+            return
+        except Exception:
+            pass
+    if shutil.which("xsel"):
+        try:
+            proc = subprocess.Popen(["xsel", "-b", "-i"], stdin=subprocess.PIPE)
+            proc.communicate(input=text.encode("utf-8"), timeout=0.5)
+            return
+        except Exception:
+            pass
 
 
 class FileOfferModal(ModalScreen[bool]):
@@ -60,7 +173,7 @@ class FileOfferModal(ModalScreen[bool]):
 class ChatApp(App):
     CSS = """
     #main { height: 1fr; }
-    #peer-list { width: 28; border: solid $accent; }
+    #peer-list { width: 30; border: solid $accent; }
     #chat-log { border: solid $accent; }
     #offer-dialog {
         align: center middle;
@@ -70,8 +183,17 @@ class ChatApp(App):
         width: 60;
         height: auto;
     }
+    Screen > .screen--selection {
+        background: $primary;
+        color: $text;
+    }
     """
-    BINDINGS = [("ctrl+c", "quit", "Quit")]
+    BINDINGS = [
+        ("ctrl+c", "copy_or_quit", "Copy / Quit"),
+        ("ctrl+shift+c", "copy_selection", "Copy"),
+        ("ctrl+q", "quit", "Quit"),
+        ("ctrl+k", "clear_chat", "Clear"),
+    ]
 
     def __init__(self):
         super().__init__()
@@ -82,14 +204,14 @@ class ChatApp(App):
         self.chat_session: Optional[chat.ChatSession] = None
         self.file_session: Optional[file_transfer.FileTransferSession] = None
         self.active_peer_id: Optional[str] = None
-        # addr_key changes when a peer's IP changes (DHCP), so we resolve
-        # peer_id -> current addr_key at send time via self.registry.
+        self._last_received_msg: str = ""
+        self._next_on_message = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="main"):
             yield ListView(id="peer-list")
-            yield RichLog(id="chat-log", wrap=True, markup=True)
+            yield SelectableRichLog(id="chat-log", wrap=True, markup=True)
         yield Input(placeholder="Type a message, or /help for commands", id="input-box")
         yield Footer()
 
@@ -112,6 +234,10 @@ class ChatApp(App):
             on_complete=self._on_transfer_complete,
         )
 
+        # Wire TCP handshake (hello / hello_ack) on top of file and chat sessions
+        self._next_on_message = self.manager.on_message
+        self.manager.on_message = self._dispatch_handshake
+
         await self.manager.start_server()
         self._discovery = discovery.Discovery(
             self.peer_id, self.display_name, UI_TCP_PORT, self.registry,
@@ -119,13 +245,76 @@ class ChatApp(App):
         asyncio.create_task(self._discovery.run())
         asyncio.create_task(self._prune_ui_loop())
 
-        log = self.query_one("#chat-log", RichLog)
+        log = self.query_one("#chat-log", SelectableRichLog)
         log.write(f"[bold cyan]Started as {self.display_name} ({self.peer_id[:8]})[/bold cyan]")
-        log.write("Waiting for peers... use /help for commands.")
+        log.write("Waiting for peers... use [bold yellow]/help[/bold yellow] for commands.")
+        log.write("[dim]Tip: Drag mouse over text to block/select. Press Ctrl+C or Ctrl+Shift+C to copy. Press Ctrl+Q to quit.[/dim]")
+
+    def copy_to_clipboard(self, text: str) -> None:
+        """Copy text to clipboard using terminal escape sequences and system tools."""
+        super().copy_to_clipboard(text)
+        copy_to_system_clipboard(text)
+
+    def action_copy_selection(self) -> None:
+        """Explicit copy action for Ctrl+Shift+C."""
+        selected = self.screen.get_selected_text()
+        if selected:
+            self.copy_to_clipboard(selected)
+            preview = selected.strip()[:32] + ("..." if len(selected.strip()) > 32 else "")
+            self.notify(f"Copied: {preview}", title="Clipboard", timeout=2)
+        else:
+            self.notify("No text selected to copy", title="Clipboard", timeout=1.5)
+
+    def action_copy_or_quit(self) -> None:
+        """Ctrl+C handler: copies selection if text is blocked, otherwise exits."""
+        selected = self.screen.get_selected_text()
+        if selected:
+            self.copy_to_clipboard(selected)
+            preview = selected.strip()[:32] + ("..." if len(selected.strip()) > 32 else "")
+            self.notify(f"Copied: {preview}", title="Clipboard", timeout=2)
+        else:
+            self.exit()
+
+    def action_clear_chat(self) -> None:
+        self.query_one("#chat-log", SelectableRichLog).clear()
+        self._log("[dim]Chat log cleared.[/dim]")
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """Switch active conversation when clicking a peer in the left sidebar."""
+        if event.item and event.item.name:
+            self.active_peer_id = event.item.name
+            peer = self.registry.get(event.item.name)
+            target_name = peer.name if peer else event.item.name
+            self._log(f"[cyan]Active peer -> {target_name}[/cyan]")
+            self._refresh_peer_list()
+
+    async def _dispatch_handshake(self, addr_key: str, message: dict) -> None:
+        msg_type = message.get("type")
+        ip = addr_key.rsplit(":", 1)[0]
+        if msg_type == "hello":
+            peer_id = message.get("peer_id", "")
+            sender_name = message.get("sender_name", ip)
+            tcp_port = message.get("tcp_port", UI_TCP_PORT)
+            if peer_id and peer_id != self.peer_id:
+                self.registry.upsert(peer_id, sender_name, ip, tcp_port)
+                self._refresh_peer_list()
+                if self.active_peer_id is None:
+                    self.active_peer_id = peer_id
+                ack = protocol.make_hello_ack(self.peer_id, self.display_name, UI_TCP_PORT)
+                await self.manager.send(addr_key, ack)
+        elif msg_type == "hello_ack":
+            peer_id = message.get("peer_id", "")
+            sender_name = message.get("sender_name", ip)
+            tcp_port = message.get("tcp_port", UI_TCP_PORT)
+            if peer_id and peer_id != self.peer_id:
+                self.registry.upsert(peer_id, sender_name, ip, tcp_port)
+                self._refresh_peer_list()
+                if self.active_peer_id is None:
+                    self.active_peer_id = peer_id
+        elif self._next_on_message:
+            await self._next_on_message(addr_key, message)
 
     async def _prune_ui_loop(self) -> None:
-        # PeerRegistry.prune_stale() is normally driven by Discovery.run(),
-        # but we also refresh the visible list on a steady cadence.
         while True:
             await asyncio.sleep(2.0)
             self._refresh_peer_list()
@@ -133,12 +322,15 @@ class ChatApp(App):
     def _refresh_peer_list(self) -> None:
         peer_list = self.query_one("#peer-list", ListView)
         peer_list.clear()
-        for peer in self.registry.list_peers():
-            marker = "* " if peer.peer_id == self.active_peer_id else "  "
-            peer_list.append(ListItem(Label(f"{marker}{peer.name} ({peer.peer_id[:8]})"), name=peer.peer_id))
+        peers = self.registry.list_peers()
+        for peer in peers:
+            is_active = (peer.peer_id == self.active_peer_id)
+            marker = "[bold cyan]►[/bold cyan] " if is_active else "  "
+            label = f"{marker}[bold]{peer.name}[/bold]\n  [dim]{peer.ip}:{peer.tcp_port}[/dim]"
+            peer_list.append(ListItem(Label(label), name=peer.peer_id))
 
     def _on_peer_new(self, peer: discovery.Peer) -> None:
-        self._log(f"[green]+ {peer.name} came online[/green]")
+        self._log(f"[green]+ {peer.name} came online ({peer.ip})[/green]")
         self._refresh_peer_list()
         if self.active_peer_id is None:
             self.active_peer_id = peer.peer_id
@@ -149,9 +341,9 @@ class ChatApp(App):
 
     def _log(self, text: str) -> None:
         try:
-            self.query_one("#chat-log", RichLog).write(text)
+            self.query_one("#chat-log", SelectableRichLog).write(text)
         except Exception:
-            pass  # UI not mounted yet
+            pass
 
     def _active_addr_key(self) -> Optional[str]:
         if self.active_peer_id is None:
@@ -161,15 +353,32 @@ class ChatApp(App):
             return None
         return f"{peer.ip}:{peer.tcp_port}"
 
-    async def _ensure_connected(self, addr_key: str) -> None:
+    async def _ensure_connected(self, addr_key: str) -> bool:
         if not self.manager.is_connected(addr_key):
-            ip, port_str = addr_key.rsplit(":", 1)
-            await self.manager.connect_to(ip, int(port_str))
+            try:
+                ip, port_str = addr_key.rsplit(":", 1)
+                await self.manager.connect_to(ip, int(port_str))
+                return True
+            except Exception as e:
+                self._log(f"[red]Connection error to {addr_key}: {e}[/red]")
+                return False
+        return True
 
     # ---- chat callbacks ----
 
     async def _on_chat_received(self, addr_key: str, message: dict) -> None:
-        self._log(f"[bold]<{message['sender_name']}>[/bold] {message['text']}")
+        sender_id = message.get("sender_id", "")
+        sender_name = message.get("sender_name", "peer")
+        text = message.get("text", "")
+        self._last_received_msg = text
+        ip = addr_key.rsplit(":", 1)[0]
+        if sender_id and sender_id != self.peer_id:
+            self.registry.upsert(sender_id, sender_name, ip, UI_TCP_PORT)
+            self._refresh_peer_list()
+            if self.active_peer_id is None:
+                self.active_peer_id = sender_id
+
+        self._log(f"[bold green]<{sender_name}>[/bold green] {text}")
 
     def _on_status_change(self, message_id: str, status: str) -> None:
         mark = "delivered \u2713\u2713" if status == "delivered" else "failed \u2717"
@@ -207,23 +416,91 @@ class ChatApp(App):
 
         addr_key = self._active_addr_key()
         if addr_key is None:
-            self._log("[red]No active peer. Use /msg <name> to select one.[/red]")
+            self._log("[red]No active peer. Use /msg <name> or /connect <ip> to select one.[/red]")
             return
 
-        await self._ensure_connected(addr_key)
+        connected = await self._ensure_connected(addr_key)
+        if not connected:
+            return
+
         await self.chat_session.send_chat(addr_key, self.peer_id, self.display_name, text)
-        self._log(f"[bold blue]<you>[/bold blue] {text}")
+        self._log(f"[bold cyan]<you>[/bold cyan] {text}")
 
     async def _handle_command(self, text: str) -> None:
         parts = text.split(maxsplit=1)
         cmd = parts[0].lower()
-        arg = parts[1] if len(parts) > 1 else ""
+        arg = parts[1].strip() if len(parts) > 1 else ""
 
-        if cmd == "/help":
-            self._log(
-                "[bold]Commands:[/bold] /msg <name-or-id-prefix>  /send <filepath>  /help"
-            )
+        if cmd in ("/help", "/h"):
+            self._log("[bold yellow]╔═══════════════════════ Commands ═══════════════════════╗[/bold yellow]")
+            self._log(" [bold cyan]/connect <ip>[:port][/bold cyan]  Connect to peer IP (hotspot / AP fix)")
+            self._log(" [bold cyan]/peers[/bold cyan]                List all discovered peers & status")
+            self._log(" [bold cyan]/msg <name|id>[/bold cyan]        Switch active chat recipient")
+            self._log(" [bold cyan]/send <filepath>[/bold cyan]      Offer a file to active peer")
+            self._log(" [bold cyan]/nick <new-name>[/bold cyan]      Change display name and re-announce")
+            self._log(" [bold cyan]/copy [all|last][/bold cyan]      Copy chat log or last message")
+            self._log(" [bold cyan]/clear[/bold cyan]                Clear chat log screen")
+            self._log(" [bold cyan]/info[/bold cyan] or [bold cyan]/me[/bold cyan]           Show self identity & network details")
+            self._log(" [bold cyan]/quit[/bold cyan] or [bold cyan]/exit[/bold cyan]          Exit application")
+            self._log("[bold yellow]╚═══════════════════════ Shortcuts ══════════════════════╝[/bold yellow]")
+            self._log(" [dim]• Block text with mouse cursor, then press Ctrl+C or Ctrl+Shift+C to copy[/dim]")
+            self._log(" [dim]• Click any peer in the sidebar to switch conversation[/dim]")
+            self._log(" [dim]• Ctrl+C : Copy selected text (or quit if nothing selected)[/dim]")
+            self._log(" [dim]• Ctrl+Shift+C : Copy selected text to clipboard[/dim]")
+            self._log(" [dim]• Ctrl+Q : Quit p2p-chat immediately[/dim]")
+            self._log(" [dim]• Ctrl+K : Clear chat history[/dim]")
+
+        elif cmd in ("/connect", "/add"):
+            if not arg:
+                self._log("[yellow]Usage: /connect <ip> or /connect <ip>:<port>[/yellow]")
+                return
+            port = UI_TCP_PORT
+            ip = arg
+            if ":" in arg:
+                ip_part, port_str = arg.rsplit(":", 1)
+                if port_str.isdigit():
+                    ip = ip_part
+                    port = int(port_str)
+
+            self._log(f"[cyan]Connecting to {ip}:{port}...[/cyan]")
+            # 1. Send immediate UDP discovery probe
+            self._discovery.probe_peer(ip)
+
+            # 2. Establish TCP connection
+            try:
+                addr_key = await self.manager.connect_to(ip, port)
+                # 3. Send hello handshake
+                hello = protocol.make_hello(self.peer_id, self.display_name, UI_TCP_PORT)
+                await self.manager.send(addr_key, hello)
+
+                # 4. Upsert temporary peer entry if not already present
+                existing = next((p for p in self.registry.list_peers() if p.ip == ip), None)
+                if not existing:
+                    manual_id = f"peer-{ip}"
+                    self.registry.upsert(manual_id, f"Peer ({ip})", ip, port)
+                    self.active_peer_id = manual_id
+                else:
+                    self.active_peer_id = existing.peer_id
+
+                self._refresh_peer_list()
+                self._log(f"[green]✓ Connected to {ip}:{port}! Active peer set.[/green]")
+            except Exception as e:
+                self._log(f"[red]Failed to connect to {ip}:{port}: {e}[/red]")
+
+        elif cmd == "/peers":
+            peers = self.registry.list_peers()
+            if not peers:
+                self._log("[yellow]No peers currently detected. Use /connect <ip> to connect directly.[/yellow]")
+            else:
+                self._log("[bold yellow]Discovered peers:[/bold yellow]")
+                for p in peers:
+                    active = " [bold cyan](ACTIVE)[/bold cyan]" if p.peer_id == self.active_peer_id else ""
+                    self._log(f"  • [bold]{p.name}[/bold] ({p.peer_id[:8]}) at {p.ip}:{p.tcp_port}{active}")
+
         elif cmd == "/msg":
+            if not arg:
+                self._log("[yellow]Usage: /msg <name-or-id-prefix>[/yellow]")
+                return
             match = next(
                 (p for p in self.registry.list_peers()
                  if arg.lower() in p.name.lower() or p.peer_id.startswith(arg)),
@@ -235,20 +512,88 @@ class ChatApp(App):
                 self._refresh_peer_list()
             else:
                 self._log(f"[red]No peer matching '{arg}'[/red]")
+
         elif cmd == "/send":
             if not arg or not os.path.isfile(arg):
                 self._log(f"[red]File not found: {arg}[/red]")
                 return
             addr_key = self._active_addr_key()
             if addr_key is None:
-                self._log("[red]No active peer. Use /msg <name> first.[/red]")
+                self._log("[red]No active peer. Use /msg <name> or /connect <ip> first.[/red]")
                 return
-            await self._ensure_connected(addr_key)
+            connected = await self._ensure_connected(addr_key)
+            if not connected:
+                return
             transfer_id = await self.file_session.offer_file(addr_key, arg)
             self._log(f"[cyan]Offered {os.path.basename(arg)} ({transfer_id[:8]})[/cyan]")
+
+        elif cmd == "/nick":
+            if not arg:
+                self._log(f"[yellow]Current nickname: {self.display_name}. Usage: /nick <new_name>[/yellow]")
+                return
+            old_name = self.display_name
+            self.display_name = arg
+            self.title = f"p2p-chat — {self.display_name} ({self.peer_id[:8]})"
+            self._discovery.name = arg
+            discovery.save_identity(self.peer_id, arg)
+            self._discovery.broadcast_now()
+            self._log(f"[green]Nickname changed from '{old_name}' to '{arg}'[/green]")
+
+        elif cmd == "/copy":
+            log_widget = self.query_one("#chat-log", SelectableRichLog)
+            if arg == "all":
+                all_text = "\n".join(strip.text.rstrip() for strip in log_widget.lines)
+                if all_text:
+                    self.copy_to_clipboard(all_text)
+                    self._log("[green]Copied all chat history to clipboard![/green]")
+                    self.notify("All chat history copied!", title="Clipboard")
+                else:
+                    self._log("[yellow]Chat log is empty.[/yellow]")
+            else:
+                if self._last_received_msg:
+                    self.copy_to_clipboard(self._last_received_msg)
+                    self._log(f"[green]Copied last message: '{self._last_received_msg}'[/green]")
+                    self.notify(f"Copied: {self._last_received_msg[:20]}", title="Clipboard")
+                else:
+                    # Try copying last line of log
+                    if log_widget.lines:
+                        last_line = log_widget.lines[-1].text.strip()
+                        self.copy_to_clipboard(last_line)
+                        self._log(f"[green]Copied: '{last_line}'[/green]")
+                        self.notify("Copied last line!", title="Clipboard")
+                    else:
+                        self._log("[yellow]No message to copy.[/yellow]")
+
+        elif cmd in ("/clear", "/cls"):
+            self.action_clear_chat()
+
+        elif cmd in ("/info", "/me"):
+            net = discovery.get_network_info()
+            ips_str = ", ".join(net.get("local_ips", [])) or "unknown"
+            targets_str = ", ".join(net.get("targets", []))
+            self._log("[bold yellow]╔════════════════════ Self Info ════════════════════╗[/bold yellow]")
+            self._log(f"  [bold]Name:[/bold]       {self.display_name}")
+            self._log(f"  [bold]Peer ID:[/bold]    {self.peer_id}")
+            self._log(f"  [bold]TCP Port:[/bold]   {UI_TCP_PORT}")
+            self._log(f"  [bold]UDP Port:[/bold]   {discovery.BROADCAST_PORT}")
+            self._log(f"  [bold]Local IPs:[/bold]  {ips_str}")
+            self._log(f"  [bold]Broadcasts:[/bold] {targets_str}")
+            active_peer = self.registry.get(self.active_peer_id) if self.active_peer_id else None
+            active_str = f"{active_peer.name} ({active_peer.ip})" if active_peer else "None"
+            self._log(f"  [bold]Active Peer:[/bold]{active_str}")
+            self._log("[bold yellow]╚═══════════════════════════════════════════════════╝[/bold yellow]")
+
+        elif cmd in ("/quit", "/exit", "/q"):
+            self.exit()
+
         else:
-            self._log(f"[red]Unknown command: {cmd}[/red]")
+            self._log(f"[red]Unknown command: {cmd}. Type /help for command list.[/red]")
+
+
+def main() -> None:
+    """CLI entrypoint for pchat."""
+    ChatApp().run()
 
 
 if __name__ == "__main__":
-    ChatApp().run()
+    main()
