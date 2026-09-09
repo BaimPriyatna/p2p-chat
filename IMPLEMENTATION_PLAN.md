@@ -1,0 +1,1887 @@
+# Implementation Plan — peerc
+
+> Disesuaikan dari rencana implementasi sebelumnya (saat proyek masih
+> bernama `p2p-chat`). Perubahan di versi ini: nama proyek → **peerc**, dan
+> Phase 3 (Device Identity) ditambahkan ringkasan keputusan final soal
+> kenapa IP/MAC/hostname/hardware-serial ditolak sebagai basis identity
+> (detail lengkap ada di `BUG_REPORT.md` BUG-003).
+>
+> Status implementasi saat ini: Phase 1 (stabilisasi bug kritis di kode yang
+> sudah ada) sebagian besar sudah jalan — lihat tabel status di
+> `BUG_REPORT.md`. Phase 3 ke atas (identity, encryption, dst.) belum
+> dimulai.
+
+Target akhirnya:
+
+```
+┌────────────── Device A ──────────────┐
+│                                      │
+│ Identity (Ed25519)                   │
+│ Secure Private Key                   │
+│ Trusted Devices                      │
+│                                      │
+│        ↓ authenticated handshake     │
+│                                      │
+│ Ephemeral X25519                     │
+│        ↓                             │
+│ HKDF → Session Keys                  │
+│        ↓                             │
+│ ChaCha20-Poly1305                   │
+│        ↓                             │
+│ ┌───────────────┐                    │
+│ │ Chat          │                    │
+│ │ File Transfer │                    │
+│ │ Clipboard     │                    │
+│ └───────────────┘                    │
+└──────────────────────────────────────┘
+                 ↕ LAN
+┌──────────────────────────────────────┐
+│ Device B                             │
+│ Identity + Trust + Secure Transport  │
+└──────────────────────────────────────┘
+```
+
+## 0. Prinsip desain
+
+Sebelum coding, tetapkan prinsip ini:
+
+1. LAN dianggap hostile
+2. Tidak ada server pusat
+3. Public key boleh diketahui
+4. Private key tidak pernah dikirim
+5. Device ID berasal dari public key, bukan UUID acak, bukan IP/MAC, bukan hardware serial
+6. Semua koneksi harus authenticated
+7. Semua data setelah handshake terenkripsi
+8. File dikirim sebagai binary, bukan Base64
+9. File transfer harus resumable
+10. Device yang dicabut trust-nya langsung ditolak
+11. Kompromi satu device tidak boleh membocorkan sesi lama
+12. Jangan pakai blockchain
+13. QR bukan mekanisme utama
+
+---
+
+## Phase 1 — Stabilkan kode sekarang
+
+Jangan langsung memasukkan crypto.
+
+Pertama rapikan fondasi.
+
+**Status: sebagian besar bug kritis di kode yang ada (path traversal, size
+DoS, protocol schema validation, connection limits/timeout, ACK race, dsb)
+sudah diperbaiki via patch bertahap — lihat `BUG_REPORT.md` untuk daftar
+lengkap. Poin 1.1–1.3 di bawah (pemisahan protocol/frame formal, protocol
+version field, binary framing) belum dikerjakan.**
+
+### 1.1 Pisahkan protocol dari application
+
+Sekarang `protocol.py` menangani framing + JSON.
+
+Buat:
+
+```
+core/
+├── protocol/
+│   ├── frame.py
+│   ├── messages.py
+│   └── errors.py
+```
+
+`frame.py`:
+
+```
+encode_frame()
+read_frame()
+write_frame()
+```
+
+`messages.py`:
+
+```
+HELLO
+HELLO_ACK
+CHAT
+CHAT_ACK
+
+FILE_OFFER
+FILE_ACCEPT
+FILE_REJECT
+FILE_CHUNK
+FILE_DONE
+```
+
+---
+
+### 1.2 Tetapkan protocol version
+
+Contoh:
+
+```json
+{
+  "version": 2,
+  "type": "chat",
+  "request_id": "...",
+  "payload": {}
+}
+```
+
+Jangan bergantung pada:
+
+```json
+{
+  "type": "chat"
+}
+```
+
+Karena nanti V3/V4 akan jauh lebih mudah.
+
+---
+
+### 1.3 Jangan gunakan JSON untuk data besar
+
+Sekarang:
+
+```
+file
+ ↓
+Base64
+ ↓
+JSON
+ ↓
+TCP
+```
+
+Ganti menjadi:
+
+```
+control JSON
+      ↓
+binary frame
+      ↓
+raw bytes
+```
+
+Misalnya:
+
+```
+FILE_OFFER
+FILE_ACCEPT
+FILE_DATA
+FILE_DONE
+```
+
+`FILE_DATA`:
+
+```
+transfer_id
+sequence
+offset
+length
+data
+```
+
+---
+
+## Phase 2 — Security model
+
+Sebelum implementasi crypto, buat threat model.
+
+Yang harus dilindungi
+
+| Ancaman | Target |
+|---|---|
+| Packet sniffing | encrypted |
+| Fake device | authentication |
+| MITM | authenticated key exchange |
+| Replay | nonce/session |
+| Malicious file | validation |
+| Path traversal | sanitized filename |
+| Disk DoS | size quota |
+| Private key theft | revocation |
+| Compromised device | trust removal |
+
+---
+
+## Phase 3 — Device Identity
+
+Ini bagian paling penting.
+
+Install library crypto yang matang, misalnya:
+
+```
+cryptography
+```
+
+Jangan implement algoritma crypto sendiri.
+
+Buat:
+
+```
+core/
+└── identity/
+    ├── device_identity.py
+    ├── key_storage.py
+    └── fingerprint.py
+```
+
+### 3.0 Kenapa Ed25519, bukan alternatif lain (keputusan final)
+
+Sebelum masuk ke detail generate key, ringkasan alasan tiap alternatif
+ditolak (diskusi lengkap ada di `BUG_REPORT.md` BUG-003):
+
+- **IP address** — berubah-ubah (DHCP renewal, ganti jaringan).
+- **MAC address** — di-randomize per-network oleh kebanyakan OS modern demi
+  privacy, jadi tidak reliable lagi sebagai identifier stabil.
+- **Hostname** — bisa diganti user kapan saja, dan tidak unik (dua device
+  bisa punya hostname sama).
+- **UUID acak** (status sekarang) — memang stabil, tapi **tidak bisa
+  dibuktikan kepemilikannya**. Siapa pun bisa mengklaim UUID milik device
+  lain karena tidak ada private key di baliknya.
+- **Hardware serial / machine-id / IMEI** — secara konsep permanen, tapi
+  tidak portable cross-platform (API berbeda total di Linux/Windows/macOS/
+  Android), dan privacy-invasive karena membocorkan identifier fisik
+  permanen ke peer lain di LAN.
+- **TPM / Secure Enclave** — paling kuat secara teori (private key tidak
+  bisa diekstrak sama sekali), tapi tidak semua device punya akses yang
+  konsisten. Ini jadi kandidat **tempat penyimpanan** private key di masa
+  depan (lihat `KeyStore` abstraction di 3.3), bukan pengganti pendekatan
+  Ed25519 itu sendiri.
+
+Kesimpulan: device identity berbasis **keypair Ed25519 yang digenerate
+sekali di device dan disimpan lokal**. Identity ini "tidak berubah" bukan
+karena terikat hardware/jaringan, tapi karena device terus memakai key yang
+sama — dan karena ada private key di baliknya, kepemilikannya **bisa
+dibuktikan** ke peer lain lewat signature (yang tidak bisa dilakukan UUID
+biasa).
+
+### 3.1 Generate Ed25519
+
+Saat pertama kali aplikasi dijalankan:
+
+```
+generate_private_key()
+generate_public_key()
+```
+
+Private key disimpan di secure storage.
+
+Public key boleh disimpan biasa.
+
+---
+
+### 3.2 Device ID
+
+Jangan:
+
+```
+UUID
+```
+
+Gunakan:
+
+```
+device_id = SHA256(public_key)
+```
+
+Misalnya:
+
+```
+Device ID:
+7f:91:32:...
+```
+
+Dengan demikian identitas:
+
+```
+Device ID
+     ↓
+Public Key
+     ↓
+Private Key
+```
+
+bersifat konsisten.
+
+---
+
+### 3.3 Identity file
+
+Secara konseptual:
+
+```json
+{
+  "version": 1,
+  "device_id": "...",
+  "public_key": "...",
+  "created_at": "..."
+}
+```
+
+Jangan simpan private key plaintext kalau secure storage tersedia.
+
+Untuk desktop:
+
+```
+Linux     → Secret Service / keyring
+Windows   → DPAPI/Credential Manager
+macOS     → Keychain
+Android   → Android Keystore
+```
+
+Karena project ini Python cross-platform, buat abstraction:
+
+```python
+class KeyStore:
+    def save_private_key(...)
+    def load_private_key(...)
+    def delete_private_key(...)
+```
+
+---
+
+## Phase 4 — Trust Store
+
+Buat:
+
+```
+core/
+└── trust/
+    ├── store.py
+    ├── device.py
+    └── revocation.py
+```
+
+Database sederhana:
+
+```
+trusted_devices
+----------------
+device_id
+public_key
+name
+first_seen
+last_seen
+status
+```
+
+Status:
+
+```
+PENDING
+TRUSTED
+REVOKED
+```
+
+---
+
+### TOFU
+
+Untuk LAN app, TOFU cukup bagus.
+
+Pertama kali:
+
+```
+Unknown Device
+      ↓
+Fingerprint:
+AB:91:73:...
+      ↓
+Trust?
+```
+
+User approve.
+
+Kemudian:
+
+```
+same public key → OK
+different public key → WARNING
+```
+
+---
+
+## Phase 5 — Discovery V2
+
+Discovery sekarang menggunakan UDP broadcast.
+
+Pertahankan itu.
+
+Tetapi jangan percaya discovery sebagai authentication.
+
+Discovery hanya menjawab:
+
+> "Ada device di network."
+
+Bukan:
+
+> "Device ini terpercaya."
+
+Broadcast:
+
+```json
+{
+  "version": 2,
+  "device_id": "...",
+  "public_key": "...",
+  "name": "...",
+  "tcp_port": 5656
+}
+```
+
+Semua field harus divalidasi (lihat BUG-023 di `BUG_REPORT.md` — validasi
+dasar untuk field-field non-identity sudah jalan; validasi `public_key`
+menyusul begitu Phase 3 selesai).
+
+---
+
+### Multi-subnet
+
+Karena ada kemungkinan dua gedung:
+
+```
+Building A
+   │
+Router
+   │
+Building B
+```
+
+UDP broadcast biasanya tidak melewati router.
+
+Maka discovery architecture:
+
+```
+Discovery
+├── UDP Broadcast
+├── mDNS
+└── Manual IP
+```
+
+Jangan membuat semuanya bergantung pada broadcast.
+
+Manual:
+
+```
+/connect 192.168.20.15
+```
+
+tetap harus tersedia (sudah jalan, termasuk IPv6 — lihat BUG-025).
+
+---
+
+## Phase 6 — Secure Handshake
+
+Ini inti keamanan.
+
+Jangan:
+
+```
+TCP
+ ↓
+HELLO
+ ↓
+langsung chat
+```
+
+Buat:
+
+```
+TCP
+ ↓
+Protocol negotiation
+ ↓
+Identity authentication
+ ↓
+Ephemeral key exchange
+ ↓
+Session established
+ ↓
+Encrypted application data
+```
+
+---
+
+### 6.1 Handshake key
+
+Identity:
+
+```
+Ed25519
+```
+
+Session:
+
+```
+X25519
+```
+
+Misalnya:
+
+```
+A:
+Ed25519 private/public
+X25519 ephemeral key
+
+B:
+Ed25519 private/public
+X25519 ephemeral key
+```
+
+---
+
+### 6.2 Authentication
+
+A mengirim:
+
+```
+device_id
+public_key_A
+ephemeral_key_A
+nonce
+signature
+```
+
+Signature mencakup seluruh transcript handshake.
+
+B memverifikasi:
+
+```
+signature
+   ↓
+public_key_A
+   ↓
+trusted?
+```
+
+Kemudian B melakukan hal yang sama.
+
+Jangan hanya sign public key.
+
+Sign transcript agar MITM tidak bisa mengganti parameter handshake.
+
+---
+
+## Phase 7 — Session Key
+
+Setelah X25519:
+
+```
+shared_secret
+      ↓
+HKDF
+      ↓
+session keys
+```
+
+Jangan menggunakan shared secret langsung sebagai encryption key.
+
+Gunakan domain separation.
+
+Contoh konsep:
+
+```
+HKDF(
+    shared_secret,
+    salt,
+    info="peerc-v2"
+)
+```
+
+Kemudian hasilnya dipisah:
+
+```
+A → B encryption key
+B → A encryption key
+```
+
+---
+
+## Phase 8 — Encryption
+
+Gunakan AEAD:
+
+```
+ChaCha20-Poly1305
+```
+
+atau:
+
+```
+AES-256-GCM
+```
+
+Pilih ChaCha20-Poly1305 untuk implementasi portable.
+
+Setiap encrypted frame:
+
+```
+sequence
+nonce
+ciphertext
+authentication tag
+```
+
+Nonce tidak boleh digunakan ulang dengan key yang sama.
+
+Lebih aman jika nonce/sequence dikelola oleh session layer secara ketat.
+
+---
+
+## Phase 9 — Secure Transport Layer
+
+Buat:
+
+```
+core/
+└── transport/
+    ├── tcp.py
+    ├── secure.py
+    ├── session.py
+    └── timeout.py
+```
+
+Application tidak perlu tahu tentang crypto.
+
+Jadi:
+
+```
+session.send(message)
+```
+
+bukan:
+
+```
+encrypt()
+socket.send()
+```
+
+Arsitektur:
+
+```
+Application
+     ↓
+SecureSession
+     ↓
+EncryptedTransport
+     ↓
+TCP
+```
+
+---
+
+## Phase 10 — Connection management
+
+Perbaiki masalah yang sekarang.
+
+Jangan key connection berdasarkan:
+
+```
+ip:port
+```
+
+Gunakan:
+
+```
+device_id
+```
+
+Karena port source TCP bisa berubah.
+
+Tambahkan:
+
+```
+connect timeout     ✅ sudah (CONNECT_TIMEOUT, lihat BUG-014)
+handshake timeout    ⏳ belum — butuh Phase 6 + connection state machine
+idle timeout         ⏳ belum
+maximum connections  ✅ sudah (MAX_CONNECTIONS, lihat BUG-016)
+maximum frame size   🟡 sebagian — sudah ada untuk chat (MAX_CHAT_TEXT_SIZE), belum untuk file
+```
+
+Contoh:
+
+```
+CONNECT_TIMEOUT = 5s
+HANDSHAKE_TIMEOUT = 5s
+IDLE_TIMEOUT = 60s
+MAX_FRAME = 16 MB
+```
+
+Untuk file jangan gunakan frame 100 MB.
+
+---
+
+## Phase 11 — Chat V2
+
+Chat menjadi:
+
+```json
+{
+  "type": "chat",
+  "message_id": "...",
+  "timestamp": 123,
+  "text": "Hello"
+}
+```
+
+ACK:
+
+```json
+{
+  "type": "chat_ack",
+  "message_id": "..."
+}
+```
+
+Tambahkan:
+
+```
+message_id      ✅ sudah ada
+timestamp
+sender_device_id
+```
+
+---
+
+### ACK race
+
+Sekarang pending message dibuat setelah send.
+
+**Status: sudah diperbaiki** — `register pending` sekarang terjadi
+*sebelum* `send`, bukan sesudahnya (lihat BUG-022 di `BUG_REPORT.md`):
+
+```
+register pending
+       ↓
+send
+       ↓
+receive ACK
+       ↓
+resolve pending
+```
+
+---
+
+## Phase 12 — File Transfer V2
+
+Ini bagian yang paling perlu direwrite.
+
+Arsitektur:
+
+```
+transfer/
+├── manager.py
+├── sender.py
+├── receiver.py
+├── chunker.py
+├── resume.py
+└── hashing.py
+```
+
+---
+
+### File Offer
+
+```json
+{
+  "type": "file_offer",
+  "transfer_id": "...",
+  "filename": "photo.jpg",
+  "size": 12345678,
+  "sha256": "...",
+  "chunk_size": 262144
+}
+```
+
+Receiver:
+
+```
+validate
+ ↓
+accept/reject
+```
+
+---
+
+## Phase 13 — Path traversal fix
+
+**Status: sudah diperbaiki** (lihat BUG-001 di `BUG_REPORT.md`).
+
+Jangan pernah:
+
+```python
+os.path.join(downloads_dir, filename)
+```
+
+langsung.
+
+Gunakan:
+
+```
+basename
+sanitization
+absolute-path check
+symlink protection
+destination confinement
+```
+
+Contoh:
+
+```
+../../important.txt
+```
+
+harus menjadi:
+
+```
+important.txt
+```
+
+atau ditolak.
+
+Dan:
+
+```
+/etc/passwd
+```
+
+harus ditolak.
+
+---
+
+## Phase 14 — Size enforcement
+
+**Status: sudah diperbaiki** (lihat BUG-002 di `BUG_REPORT.md`).
+
+Kalau offer:
+
+```
+size = 10 MB
+```
+
+receiver hanya boleh menerima:
+
+```
+<= 10 MB
+```
+
+Bukan:
+
+```
+offer 10 MB
+attacker send 10 GB
+```
+
+Track:
+
+```
+received_bytes
+```
+
+Setiap chunk:
+
+```python
+received_bytes += len(data)
+
+if received_bytes > declared_size:
+    abort()
+```
+
+---
+
+## Phase 15 — Chunk validation
+
+**Status: sudah diperbaiki** (lihat BUG-008 di `BUG_REPORT.md`) — strict
+sequential transfer sudah jalan.
+
+```python
+expected_sequence = 0
+```
+
+Kemudian:
+
+```
+chunk 0
+chunk 1
+chunk 2
+...
+```
+
+Jika:
+
+```
+chunk 7
+```
+
+datang saat expected:
+
+```
+6
+```
+
+ditolak (bukan diterima diam-diam). Out-of-order transfer dengan bitmap
+masih backlog untuk kebutuhan resume (Phase 16).
+
+---
+
+## Phase 16 — Resume
+
+Setelah transfer interruption:
+
+```
+file.part
+```
+
+disimpan.
+
+Metadata:
+
+```json
+{
+  "transfer_id": "...",
+  "filename": "...",
+  "size": 5000000000,
+  "sha256": "...",
+  "received": 2380000000
+}
+```
+
+Reconnect:
+
+```
+resume?
+```
+
+Receiver:
+
+```
+offset = 2380000000
+```
+
+Sender melanjutkan dari sana.
+
+---
+
+## Phase 17 — Integrity
+
+SHA-256 tetap digunakan.
+
+Namun:
+
+```
+SHA256 ≠ encryption
+```
+
+SHA-256 digunakan untuk memastikan:
+
+```
+file dikirim utuh
+```
+
+Setelah selesai:
+
+```
+calculated_hash
+        ==
+declared_hash
+```
+
+Kalau berbeda:
+
+```
+TRANSFER_CORRUPTED
+```
+
+**Status: sudah diperbaiki** — checksum dari `file_offer` sekarang jadi
+authoritative, `file_done` tidak lagi bisa menggantikannya (lihat BUG-010).
+
+---
+
+## Phase 18 — File encryption
+
+Tidak perlu mengenkripsi file secara terpisah.
+
+Karena:
+
+```
+File
+ ↓
+SecureSession
+ ↓
+AEAD
+ ↓
+TCP
+```
+
+sudah encrypted.
+
+Ini lebih sederhana dan menghindari double encryption.
+
+---
+
+## Phase 19 — Transfer flow final
+
+```
+Sender                         Receiver
+
+FILE_OFFER ───────────────────>
+              validate
+              sanitize
+              check disk
+              check size
+
+<──────────── FILE_ACCEPT
+
+FILE_DATA #0 ─────────────────>
+FILE_DATA #1 ─────────────────>
+FILE_DATA #2 ─────────────────>
+...
+
+FILE_DONE ────────────────────>
+
+              SHA256
+              verify
+              rename .part
+
+<──────────── FILE_COMPLETE_ACK
+```
+
+**Status:** `FILE_COMPLETE_ACK` sudah diimplementasikan (lihat BUG-012) —
+sender sekarang menunggu ack ini sebelum menandai transfer selesai, bukan
+langsung declare "done" setelah kirim byte terakhir.
+
+---
+
+## Phase 20 — Disk safety
+
+Sebelum menerima file:
+
+```
+available disk space
+```
+
+harus dicek.
+
+Misalnya:
+
+```
+file = 10 GB
+free disk = 3 GB
+```
+
+langsung reject.
+
+Tambahkan:
+
+```
+MAX_FILE_SIZE            ✅ sudah (MAX_INCOMING_FILE_SIZE)
+MAX_CONCURRENT_TRANSFERS ⏳ belum
+MAX_TOTAL_INCOMING_SIZE  ⏳ belum
+```
+
+---
+
+## Phase 21 — Rate limiting
+
+Karena LAN bisa hostile:
+
+```
+connection rate
+handshake rate
+file offer rate
+chat message rate
+```
+
+dibatasi.
+
+Misalnya konsep:
+
+```
+max 10 connection attempts / minute
+max 5 simultaneous transfers
+```
+
+Angka final bisa dikonfigurasi. (Connection *count* limit sudah ada via
+`MAX_CONNECTIONS` — lihat BUG-016 — tapi itu batas total, bukan rate.)
+
+---
+
+## Phase 22 — Discovery security
+
+Discovery packet tidak dianggap terpercaya.
+
+Misalnya attacker mengirim:
+
+```json
+{
+  "device_id": "victim",
+  "name": "Laptop Baim",
+  "ip": "192.168.1.10"
+}
+```
+
+Tidak masalah.
+
+Ketika connect:
+
+```
+device_id
+      ↓
+public key
+      ↓
+signature
+      ↓
+trust store
+```
+
+baru dipercaya.
+
+---
+
+## Phase 23 — Device revocation
+
+UI:
+
+```
+Trusted Devices
+
+● Laptop
+  ID: A8F2...
+  Last seen: 2 min ago
+
+● Phone
+  ID: 91C3...
+  Last seen: 5 min ago
+
+[Revoke]
+```
+
+Revoke:
+
+```
+status = REVOKED
+```
+
+Connection:
+
+```python
+if device.status == REVOKED:
+    reject()
+```
+
+---
+
+## Phase 24 — Key rotation
+
+Jika private key dicurigai bocor:
+
+```
+Revoke old identity
+       ↓
+Generate new keypair
+       ↓
+New device identity
+       ↓
+Trust again
+```
+
+Jangan mencoba "mengubah" private key lama.
+
+---
+
+## Phase 25 — Forward secrecy
+
+Ini sangat penting untuk desain yang diinginkan.
+
+Identity key:
+
+```
+long-term
+```
+
+Session key:
+
+```
+ephemeral
+```
+
+Jadi:
+
+```
+Ed25519 identity
+       +
+ephemeral X25519
+       ↓
+session key
+```
+
+Jika suatu hari private identity key dicuri, attacker tidak otomatis bisa
+mendekripsi rekaman sesi lama, selama ephemeral keys/session secrets tidak
+ikut bocor.
+
+---
+
+## Phase 26 — UI architecture
+
+Jangan lagi:
+
+```
+ChatSession
+ ↓ modifies manager.on_message
+FileTransferSession
+ ↓ modifies manager.on_message
+UI
+ ↓ modifies manager.on_message
+```
+
+Ini akan semakin sulit dirawat (lihat ARCH-001 di `BUG_REPORT.md`).
+
+Gunakan event bus:
+
+```
+Network
+   ↓
+EventBus
+ ├── Security
+ ├── Chat
+ ├── Transfer
+ ├── Discovery
+ └── UI
+```
+
+Event:
+
+```
+ChatReceived
+FileOffered
+FileProgress
+TransferCompleted
+PeerConnected
+PeerDisconnected
+TrustRequired
+SecurityWarning
+```
+
+---
+
+## Phase 27 — Storage
+
+Tambahkan SQLite.
+
+Misalnya:
+
+```
+storage/
+├── database.py
+├── migrations.py
+└── models.py
+```
+
+Tables:
+
+```
+devices
+messages
+transfers
+settings
+```
+
+Jangan menyimpan private key di SQLite.
+
+---
+
+## Phase 28 — Logging
+
+Gunakan:
+
+```
+logging
+```
+
+Bukan `print()`.
+
+Level:
+
+```
+DEBUG
+INFO
+WARNING
+ERROR
+```
+
+Security-sensitive data jangan dilog:
+
+```
+private key
+session key
+plaintext secrets
+```
+
+---
+
+## Phase 29 — Testing
+
+Buat:
+
+```
+tests/
+├── unit/
+│   ├── test_protocol.py
+│   ├── test_identity.py
+│   ├── test_crypto.py
+│   ├── test_trust.py
+│   └── test_transfer.py
+│
+├── integration/
+│   ├── test_handshake.py
+│   ├── test_chat.py
+│   └── test_file_transfer.py
+│
+└── security/
+    ├── test_path_traversal.py
+    ├── test_replay.py
+    ├── test_invalid_signature.py
+    ├── test_oversized_transfer.py
+    └── test_revoked_device.py
+```
+
+**Status:** struktur formal di atas belum dibuat, tapi cakupan setara sudah
+ada secara flat di root repo: `test_security_fixes.py` (path traversal,
+oversized transfer, protocol schema) dan `test_upgrade_fixes.py` (connection
+limits/timeout, discovery validation). Reorganisasi ke struktur `tests/`
+di atas cocok dilakukan bersamaan dengan Phase 1.1 (pemisahan `protocol.py`
+ke `core/protocol/`).
+
+---
+
+## Phase 30 — Security test cases
+
+Wajib dites:
+
+Fake identity
+
+```
+Attacker claims device_id A
+→ reject
+```
+
+Invalid signature
+
+```
+modified handshake
+→ reject
+```
+
+MITM
+
+```
+A ↔ attacker ↔ B
+→ authentication failure
+```
+
+Replay
+
+```
+old handshake
+→ reject
+```
+
+Revoked key
+
+```
+valid signature + revoked device
+→ reject
+```
+
+Path traversal
+
+```
+../../file
+/etc/passwd
+C:\Windows\...
+
+→ reject.
+```
+
+**Status: sudah ditest** — lihat `test_security_fixes.py::test_path_traversal`.
+
+Oversized file
+
+```
+declared = 10 MB
+actual = 20 MB
+
+→ abort.
+```
+
+**Status: sudah ditest** — lihat `test_security_fixes.py::test_oversized_declared_then_overflow_chunk`.
+
+Corruption
+
+```
+modified chunk
+
+→ authentication/integrity failure.
+```
+
+---
+
+## Phase 31 — Performance
+
+Target:
+
+```
+No Base64
+No giant JSON
+Streaming I/O
+```
+
+Pipeline:
+
+```
+Disk
+ ↓
+64/256 KB buffer
+ ↓
+Encrypt
+ ↓
+TCP
+```
+
+Receiver:
+
+```
+TCP
+ ↓
+Decrypt
+ ↓
+Disk
+```
+
+Jangan:
+
+```
+entire file → RAM
+```
+
+---
+
+## Phase 32 — Concurrency
+
+Gunakan async untuk:
+
+```
+network
+connections
+transfer
+discovery
+```
+
+File hashing/I/O yang berat jangan menghambat event loop.
+
+Gunakan:
+
+```
+asyncio.to_thread()
+```
+
+atau executor jika diperlukan.
+
+---
+
+## Phase 33 — Protocol state machine
+
+Ini akan membuat implementation jauh lebih aman.
+
+Connection:
+
+```
+CONNECTED
+   ↓
+HANDSHAKING
+   ↓
+AUTHENTICATED
+   ↓
+ESTABLISHED
+   ↓
+CLOSING
+   ↓
+CLOSED
+```
+
+Tidak boleh:
+
+```
+CONNECTED → FILE_DATA
+```
+
+sebelum:
+
+```
+ESTABLISHED
+```
+
+Ini juga prasyarat untuk menyelesaikan sisa BUG-014 (handshake timeout) —
+tanpa state machine ini, tidak ada tempat yang jelas untuk menaruh timer
+"belum ESTABLISHED dalam N detik → drop".
+
+---
+
+## Phase 34 — Transfer state machine
+
+```
+OFFERED
+   ↓
+ACCEPTED
+   ↓
+TRANSFERRING
+   ↓
+VERIFYING
+   ↓
+COMPLETED
+```
+
+Failure:
+
+```
+REJECTED
+CANCELLED
+FAILED
+EXPIRED
+```
+
+Resume:
+
+```
+PAUSED
+ ↓
+RESUMING
+ ↓
+TRANSFERRING
+```
+
+---
+
+## Phase 35 — Error protocol
+
+Jangan lagi silent failure.
+
+Buat:
+
+```json
+{
+  "type": "error",
+  "code": "AUTH_FAILED",
+  "message": "Authentication failed"
+}
+```
+
+Codes:
+
+```
+AUTH_FAILED
+DEVICE_REVOKED
+PROTOCOL_MISMATCH
+INVALID_FRAME
+TRANSFER_NOT_FOUND
+SIZE_EXCEEDED
+DISK_FULL
+CHECKSUM_MISMATCH
+TRANSFER_EXPIRED
+```
+
+`protocol.py` sudah punya `make_error()` sebagai starting point.
+
+---
+
+## Phase 36 — CLI/UI
+
+Target command:
+
+```
+/pairs
+/devices
+/trust <id>
+/revoke <id>
+/connect <ip>
+/send <file>
+/cancel <transfer>
+/resume <transfer>
+/nick <name>
+```
+
+Contoh:
+
+```
+Devices
+
+✓ Baim Laptop
+  192.168.1.20
+  Trusted
+
+? Android
+  192.168.1.31
+  Pending
+
+✗ Old Laptop
+  Revoked
+```
+
+---
+
+## Phase 37 — Security UX
+
+Ketika device baru:
+
+```
+New device detected
+
+Name: Android
+Device ID: 91C3...
+Fingerprint:
+A2:73:19:...
+
+[Trust] [Reject]
+```
+
+Kalau key berubah:
+
+```
+⚠ SECURITY WARNING
+
+Device "Android" changed identity.
+
+Previous fingerprint:
+A2:73:19:...
+
+New fingerprint:
+71:9F:22:...
+
+Possible reasons:
+• device reinstalled
+• key rotated
+• identity compromised
+
+[Trust New Key]
+[Reject]
+```
+
+Ini jauh lebih penting daripada sekadar membuat crypto kuat.
+
+---
+
+## Phase 38 — Project structure final
+
+Target akhirnya:
+
+```
+peerc/
+│
+├── app/
+│   ├── main.py
+│   └── config.py
+│
+├── core/
+│   ├── protocol/
+│   │   ├── frame.py
+│   │   ├── messages.py
+│   │   └── errors.py
+│   │
+│   ├── transport/
+│   │   ├── tcp.py
+│   │   ├── secure.py
+│   │   └── session.py
+│   │
+│   ├── crypto/
+│   │   ├── identity.py
+│   │   ├── handshake.py
+│   │   ├── key_exchange.py
+│   │   └── encryption.py
+│   │
+│   └── identity/
+│       ├── device.py
+│       └── keystore.py
+│
+├── discovery/
+│   ├── broadcast.py
+│   ├── mdns.py
+│   └── registry.py
+│
+├── trust/
+│   ├── store.py
+│   └── revocation.py
+│
+├── messaging/
+│   ├── chat.py
+│   └── ack.py
+│
+├── transfer/
+│   ├── manager.py
+│   ├── sender.py
+│   ├── receiver.py
+│   ├── chunk.py
+│   ├── resume.py
+│   └── hashing.py
+│
+├── storage/
+│   ├── database.py
+│   └── migrations.py
+│
+├── ui/
+│   └── textual_app.py
+│
+└── tests/
+    ├── unit/
+    ├── integration/
+    └── security/
+```
+
+---
+
+## Urutan implementasi yang disarankan
+
+Jangan mengikuti urutan struktur folder di atas secara mentah. Kerjakan
+seperti ini:
+
+```
+1. Fix critical bugs                    ✅ sebagian besar sudah (lihat status di atas)
+        ↓
+2. Protocol V2                          ⏳ belum
+        ↓
+3. Binary file transfer                 ⏳ belum
+        ↓
+4. Device identity                      ⏳ belum (keputusan desain final)
+        ↓
+5. Trust store                          ⏳ belum
+        ↓
+6. Authenticated handshake              ⏳ belum
+        ↓
+7. Encrypted session                    ⏳ belum
+        ↓
+8. Secure connection manager            ⏳ belum
+        ↓
+9. File transfer security               ⏳ belum
+        ↓
+10. Resume                              ⏳ belum
+        ↓
+11. Discovery V2                        ⏳ belum
+        ↓
+12. Event architecture                  ⏳ belum
+        ↓
+13. SQLite                              ⏳ belum
+        ↓
+14. UI security/trust UX                ⏳ belum
+        ↓
+15. Automated tests                     🟡 sebagian (lihat Phase 29)
+        ↓
+16. Performance testing                 ⏳ belum
+        ↓
+17. Security audit                      ⏳ belum
+        ↓
+18. Release
+```
+
+## Prioritas versi
+
+Milestone:
+
+**v0.3 — Secure Foundation**
+- Protocol V2
+- binary frames
+- device identity
+- Ed25519
+- trust store
+- authenticated handshake
+
+**v0.4 — Encrypted Transport**
+- X25519
+- HKDF
+- ChaCha20-Poly1305
+- session keys
+- replay protection
+- timeouts
+
+**v0.5 — Reliable Transfer**
+- binary streaming
+- size enforcement ✅
+- safe filenames ✅
+- SHA-256 ✅
+- progress ✅
+- cancel
+- resume
+
+**v0.6 — Discovery**
+- UDP broadcast ✅
+- mDNS
+- manual connection ✅ (termasuk IPv6)
+- multi-subnet support
+
+**v0.7 — Persistence**
+- SQLite
+- message history
+- transfer history
+- trusted devices
+
+**v0.8 — Production Hardening**
+- rate limiting
+- connection limits ✅
+- fuzz testing
+- security tests 🟡 (sebagian, lihat Phase 29/30)
+- resource limits
+- better error handling ✅ (schema validation, lihat BUG-017/018)
+
+**v1.0**
+- Secure
+- Reliable
+- Fast
+- Cross-platform
+- Easy to use
+
+---
+
+## Dan satu hal yang penting
+
+Jangan mulai dengan membuat `crypto.py` besar yang berisi semua kriptografi.
+
+Buat crypto sebagai primitive yang kecil:
+
+```
+identity.py
+    ↓
+Ed25519
+
+key_exchange.py
+    ↓
+X25519
+
+kdf.py
+    ↓
+HKDF
+
+encryption.py
+    ↓
+ChaCha20-Poly1305
+```
+
+Kemudian `handshake.py` yang menggabungkan semuanya.
+
+Dengan begitu bisa diaudit:
+
+```
+Identity
+   ↓
+Authentication
+   ↓
+Key exchange
+   ↓
+Session
+   ↓
+Encryption
+```
+
+secara terpisah.
+
+Langkah berikutnya yang disarankan untuk repo `peerc`: mulai dari
+**Phase 1 → Protocol V2** terlebih dahulu, lalu baru crypto (Phase 3+). Itu
+jauh lebih aman daripada menambahkan enkripsi ke arsitektur sekarang,
+karena masalah framing, file transfer, connection lifecycle, dan trust
+boundary-nya harus dibereskan dulu.
