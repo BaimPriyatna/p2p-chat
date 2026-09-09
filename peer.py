@@ -19,6 +19,13 @@ import protocol
 
 OnMessage = Callable[[str, dict], Awaitable[None]]  # (peer_addr_key, message) -> None
 
+CONNECT_TIMEOUT = 5.0    # seconds to wait for outgoing TCP connect (BUG-014)
+MAX_CONNECTIONS = 64     # simultaneous connections, incoming + outgoing (BUG-016)
+
+
+class ConnectionLimitError(Exception):
+    """Raised when accepting/opening a connection would exceed MAX_CONNECTIONS."""
+
 
 @dataclass
 class Connection:
@@ -36,9 +43,10 @@ class ConnectionManager:
     peer_id -> addr_key using the discovery peer list.
     """
 
-    def __init__(self, listen_port: int, on_message: OnMessage):
+    def __init__(self, listen_port: int, on_message: OnMessage, max_connections: int = MAX_CONNECTIONS):
         self.listen_port = listen_port
         self.on_message = on_message
+        self.max_connections = max_connections
         self._connections: dict[str, Connection] = {}
         self._server: Optional[asyncio.base_events.Server] = None
 
@@ -52,6 +60,17 @@ class ConnectionManager:
     ) -> None:
         peer_addr = writer.get_extra_info("peername")
         addr_key = f"{peer_addr[0]}:{peer_addr[1]}"
+
+        # BUG-016: a hostile LAN peer opening unlimited connections is a
+        # cheap resource-exhaustion attack. Reject once we're at capacity.
+        if len(self._connections) >= self.max_connections:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except OSError:
+                pass
+            return
+
         conn = Connection(reader, writer, addr_key)
         self._connections[addr_key] = conn
         await self._read_loop(conn)
@@ -62,7 +81,17 @@ class ConnectionManager:
         if addr_key in self._connections:
             return addr_key
 
-        reader, writer = await asyncio.open_connection(ip, port)
+        if len(self._connections) >= self.max_connections:
+            raise ConnectionLimitError(
+                f"at connection limit ({self.max_connections}); refusing to connect to {addr_key}"
+            )
+
+        # BUG-014: open_connection() has no built-in timeout — a peer that
+        # accepts the TCP handshake but never completes it (or a stalled
+        # network path) would hang this call forever without one.
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(ip, port), timeout=CONNECT_TIMEOUT
+        )
         conn = Connection(reader, writer, addr_key)
         self._connections[addr_key] = conn
         # Run the read loop in the background so this call returns immediately
@@ -73,6 +102,7 @@ class ConnectionManager:
         try:
             while True:
                 message = await protocol.read_message(conn.reader)
+                protocol.validate_message(message)  # raises ProtocolError if malformed
                 await self.on_message(conn.addr_key, message)
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass  # peer disconnected

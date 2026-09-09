@@ -107,16 +107,34 @@ class ChatSession:
         message = protocol.make_chat_message(sender_id, sender_name, text)
         message_id = message["message_id"]
 
-        ok = await self.manager.send(addr_key, message)
-        if not ok:
-            # Not even connected — report as failed immediately, don't track.
+        if len(text.encode("utf-8", errors="replace")) > protocol.MAX_CHAT_TEXT_SIZE:
+            # BUG-021: don't even attempt to send something the receiver's
+            # own validate_message() would just reject and disconnect over.
             if self.on_status_change:
                 self.on_status_change(message_id, "failed")
             return message_id
 
+        # BUG-022: register the pending/timeout state BEFORE sending, not
+        # after. On a fast local connection the ack can theoretically race
+        # back before `_pending[message_id]` existed, so `_handle_ack`
+        # would silently drop a legitimate ack.
         state = SentMessageState(message_id=message_id, addr_key=addr_key)
-        state.timeout_task = asyncio.create_task(self._timeout_watcher(message_id))
         self._pending[message_id] = state
+
+        ok = await self.manager.send(addr_key, message)
+        if not ok:
+            # Not even connected — report as failed immediately, don't track.
+            self._pending.pop(message_id, None)
+            if self.on_status_change:
+                self.on_status_change(message_id, "failed")
+            return message_id
+
+        if message_id not in self._pending:
+            # Already resolved (e.g. an ack raced in while send() was still
+            # awaiting) — nothing left to time out.
+            return message_id
+
+        state.timeout_task = asyncio.create_task(self._timeout_watcher(message_id))
         return message_id
 
     def get_status(self, message_id: str) -> Optional[str]:

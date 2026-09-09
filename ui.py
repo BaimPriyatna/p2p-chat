@@ -19,7 +19,7 @@ Commands typed into the input box:
     /copy [last|all]                copy chat to system clipboard
     /clear                          clear chat log
     /info or /me                    show local identity and network details
-    /quit or /exit                  quit p2p-chat
+    /quit or /exit                  quit peerc
 
 Cursor & Mouse:
     - Click and drag text in the chat log to select/block text.
@@ -34,6 +34,7 @@ import shutil
 import subprocess
 from typing import Optional
 
+from rich.markup import escape as rich_escape
 from rich.style import Style
 from textual import events
 from textual.app import App, ComposeResult
@@ -217,7 +218,7 @@ class ChatApp(App):
 
     async def on_mount(self) -> None:
         self.peer_id, self.display_name = discovery.load_or_create_identity()
-        self.title = f"p2p-chat — {self.display_name} ({self.peer_id[:8]})"
+        self.title = f"peerc — {self.display_name} ({self.peer_id[:8]})"
 
         self.registry = discovery.PeerRegistry(
             on_peer_new=self._on_peer_new, on_peer_lost=self._on_peer_lost,
@@ -378,7 +379,7 @@ class ChatApp(App):
             if self.active_peer_id is None:
                 self.active_peer_id = sender_id
 
-        self._log(f"[bold green]<{sender_name}>[/bold green] {text}")
+        self._log(f"[bold green]<{rich_escape(sender_name)}>[/bold green] {rich_escape(text)}")
 
     def _on_status_change(self, message_id: str, status: str) -> None:
         mark = "delivered \u2713\u2713" if status == "delivered" else "failed \u2717"
@@ -387,7 +388,7 @@ class ChatApp(App):
     # ---- file transfer callbacks ----
 
     async def _on_offer_received(self, transfer_id: str, filename: str, size: int, sender_name: str) -> bool:
-        self._log(f"[yellow]File offer from {sender_name}: {filename} ({size/1024:.1f} KB)[/yellow]")
+        self._log(f"[yellow]File offer from {rich_escape(sender_name)}: {rich_escape(filename)} ({size/1024:.1f} KB)[/yellow]")
         accepted = await self.push_screen_wait(FileOfferModal(sender_name, filename, size))
         self._log(f"[yellow]  -> {'accepted' if accepted else 'rejected'}[/yellow]")
         return bool(accepted)
@@ -447,20 +448,37 @@ class ChatApp(App):
             self._log(" [dim]• Click any peer in the sidebar to switch conversation[/dim]")
             self._log(" [dim]• Ctrl+C : Copy selected text (or quit if nothing selected)[/dim]")
             self._log(" [dim]• Ctrl+Shift+C : Copy selected text to clipboard[/dim]")
-            self._log(" [dim]• Ctrl+Q : Quit p2p-chat immediately[/dim]")
+            self._log(" [dim]• Ctrl+Q : Quit peerc immediately[/dim]")
             self._log(" [dim]• Ctrl+K : Clear chat history[/dim]")
 
         elif cmd in ("/connect", "/add"):
             if not arg:
-                self._log("[yellow]Usage: /connect <ip> or /connect <ip>:<port>[/yellow]")
+                self._log("[yellow]Usage: /connect <ip> or /connect <ip>:<port> (IPv6: /connect [::1]:5656)[/yellow]")
                 return
             port = UI_TCP_PORT
             ip = arg
-            if ":" in arg:
+            # BUG-025: bare "colon in string means IPv4:port" breaks on any
+            # IPv6 address (which is full of colons). Support the standard
+            # "[addr]:port" bracket notation, and otherwise only treat a
+            # single trailing ":port" as a port split — never split a raw
+            # (unbracketed) IPv6 literal like fe80::1234.
+            if arg.startswith("["):
+                closing = arg.find("]")
+                if closing != -1:
+                    ip = arg[1:closing]
+                    rest = arg[closing + 1:]
+                    if rest.startswith(":") and rest[1:].isdigit():
+                        port = int(rest[1:])
+            elif arg.count(":") == 1:
+                # Exactly one colon: unambiguous "ipv4:port" (IPv6 addresses
+                # always have 2+ colons, so this never misfires on those).
                 ip_part, port_str = arg.rsplit(":", 1)
                 if port_str.isdigit():
                     ip = ip_part
                     port = int(port_str)
+            # arg.count(":") >= 2 and no brackets -> treat as a bare IPv6
+            # address with no port, matching the /connect [IPv6]:port fix
+            # recommended in the bug report.
 
             self._log(f"[cyan]Connecting to {ip}:{port}...[/cyan]")
             # 1. Send immediate UDP discovery probe
@@ -525,19 +543,33 @@ class ChatApp(App):
             if not connected:
                 return
             transfer_id = await self.file_session.offer_file(addr_key, arg)
+            if transfer_id is None:
+                self._log(f"[red]Could not offer {os.path.basename(arg)}: not connected[/red]")
+                return
             self._log(f"[cyan]Offered {os.path.basename(arg)} ({transfer_id[:8]})[/cyan]")
 
         elif cmd == "/nick":
             if not arg:
-                self._log(f"[yellow]Current nickname: {self.display_name}. Usage: /nick <new_name>[/yellow]")
+                self._log(f"[yellow]Current nickname: {rich_escape(self.display_name)}. Usage: /nick <new_name>[/yellow]")
                 return
+
+            # BUG-020: nickname was previously accepted verbatim — no length
+            # cap, no control-character/newline check — before being stored
+            # and broadcast to every peer on the LAN.
+            if any(ord(c) < 0x20 or ord(c) == 0x7f for c in arg):
+                self._log("[red]Nickname cannot contain control characters or newlines.[/red]")
+                return
+            if len(arg) > 32:
+                self._log("[red]Nickname too long (max 32 characters).[/red]")
+                return
+
             old_name = self.display_name
             self.display_name = arg
-            self.title = f"p2p-chat — {self.display_name} ({self.peer_id[:8]})"
+            self.title = f"peerc — {self.display_name} ({self.peer_id[:8]})"
             self._discovery.name = arg
             discovery.save_identity(self.peer_id, arg)
             self._discovery.broadcast_now()
-            self._log(f"[green]Nickname changed from '{old_name}' to '{arg}'[/green]")
+            self._log(f"[green]Nickname changed from '{rich_escape(old_name)}' to '{rich_escape(arg)}'[/green]")
 
         elif cmd == "/copy":
             log_widget = self.query_one("#chat-log", SelectableRichLog)
@@ -591,7 +623,7 @@ class ChatApp(App):
 
 
 def main() -> None:
-    """CLI entrypoint for pchat."""
+    """CLI entrypoint for peerc."""
     ChatApp().run()
 
 

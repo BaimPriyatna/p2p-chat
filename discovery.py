@@ -75,7 +75,7 @@ class PeerRegistry:
         return self._peers.get(peer_id)
 
 
-def save_identity(peer_id: str, name: str, config_path: str = ".p2pchat_identity.json") -> None:
+def save_identity(peer_id: str, name: str, config_path: str = ".peerc_identity.json") -> None:
     """Persist peer identity to disk."""
     with open(config_path, "w") as f:
         json.dump({"peer_id": peer_id, "name": name}, f)
@@ -158,7 +158,7 @@ def get_network_info() -> dict:
     }
 
 
-def load_or_create_identity(config_path: str = ".p2pchat_identity.json") -> tuple[str, str]:
+def load_or_create_identity(config_path: str = ".peerc_identity.json") -> tuple[str, str]:
     """Return (peer_id, name), generating and persisting a UUID on first run.
 
     A stable peer_id is essential: it lets other peers recognize "this is
@@ -273,18 +273,31 @@ class Discovery:
         except (json.JSONDecodeError, UnicodeDecodeError):
             return
 
+        if not isinstance(msg, dict):
+            return
         if msg.get("type") != "announce":
             return
-        if msg.get("peer_id") == self.peer_id:
+
+        # BUG-023: fields were pulled out with bare .get()/indexing and
+        # trusted as-is — a crafted packet with peer_id=123 or
+        # tcp_port=-999 would sail straight into the registry.
+        peer_id = msg.get("peer_id")
+        if not isinstance(peer_id, str) or not peer_id:
+            return
+        if peer_id == self.peer_id:
             return  # ignore our own broadcast
 
+        name = msg.get("name", addr[0])
+        if not isinstance(name, str) or not name.strip():
+            name = addr[0]
+        name = name[:64]  # don't let discovery become an amplified nickname-length bug
+
+        tcp_port = msg.get("tcp_port", 0)
+        if not isinstance(tcp_port, int) or not (0 < tcp_port < 65536):
+            return
+
         ip = addr[0]
-        self.registry.upsert(
-            peer_id=msg["peer_id"],
-            name=msg.get("name", ip),
-            ip=ip,
-            tcp_port=msg.get("tcp_port", 0),
-        )
+        self.registry.upsert(peer_id=peer_id, name=name, ip=ip, tcp_port=tcp_port)
 
         # Bi-directional discovery reply:
         # If the incoming announce permits replies, immediately send a unicast announce back.
