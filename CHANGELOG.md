@@ -8,6 +8,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - Nothing yet
 
+## [1.3.1] — Phase 3.1–3.3: Ed25519 device identity module
+
+### Added
+- **`core/identity/` package** (IMPLEMENTATION_PLAN.md Phase 3) — not yet
+  wired into `discovery.py` (that's the next sub-step). Standalone and
+  fully tested on its own:
+  - `device_identity.py` — `generate_keypair()` / `keypair_from_private_pem()`
+    using the `cryptography` library's Ed25519 (no hand-rolled crypto, per
+    Phase 3's explicit instruction). `device_id = SHA256(raw public key
+    bytes)`, hex-encoded — provably tied to the key that backs it, unlike
+    the random UUID it's replacing (see Phase 3.0's rationale).
+  - `key_storage.py` — `KeyStore`: private key goes to the OS keyring
+    (Secret Service / Credential Manager / Keychain) via the `keyring`
+    library when a real backend exists, falling back to a 0600-permission
+    plaintext file when it doesn't (e.g. this dev sandbox — verified: no
+    keyring backend here, `KeyStore` correctly falls back and the file
+    lands at exactly `0600`).
+  - `fingerprint.py` — colon-separated hex formatting of a device_id
+    (SSH/TLS-style), for the human-comparable fingerprint Phase 4's
+    trust-on-first-use flow will need.
+  - `identity_file.py` — `load_or_create_identity()`: ties the above
+    together. Private key stored via `KeyStore`; public metadata
+    (`device_id`, `public_key`, `name`, `created_at`) in a separate plain
+    JSON file. Detects and raises `IdentityError` on a corrupted/
+    out-of-sync state (identity file present but key missing, or key
+    doesn't match the recorded device_id) rather than silently
+    regenerating or misbehaving.
+
+### Dependencies
+- Added `cryptography` and `keyring` to `pyproject.toml`.
+
+### Compatibility
+- Purely additive — no existing module was touched. `discovery.py` still
+  uses the old UUID-based `peer_id` for now.
+
 ## [1.3.0] — Phase 1.3: binary framing for file transfer
 
 **Note on versioning:** this change breaks file-transfer interop between
