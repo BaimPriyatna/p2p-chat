@@ -8,6 +8,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - Nothing yet
 
+## [1.4.0] — Phase 3 complete: device identity wired in
+
+### Changed
+- **`discovery.py`: `peer_id` is now an Ed25519-derived `device_id`**
+  (Phase 3.4, closes BUG-003) — `load_or_create_identity()` and
+  `save_identity()` now delegate to `core.identity` under the hood, while
+  keeping their old call signatures (`(peer_id, name)` tuple in / out) so
+  `chat.py`, `ui.py`, and `peer.py` needed zero changes.
+  - `save_identity()` now rejects a `peer_id` that doesn't match the
+    identity file's recorded `device_id` (`ValueError`) instead of
+    silently overwriting — renaming is still supported, reassigning
+    someone else's identity is not.
+  - **Not migrated**: old pre-Phase-3 identity files
+    (`.peerc_identity.json`, bare `{"peer_id": <uuid>, "name": ...}`) are
+    left untouched and unused. There's nothing to migrate — a UUID has no
+    keypair behind it. Any device upgrading to `1.4.0` gets a new,
+    provable `device_id` (and a fresh default identity file at
+    `~/.p2p-chat/identity.json`) the first time it runs.
+
+### Compatibility
+- **Breaking for existing deployments**: peers on `<1.4.0` and `1.4.0+`
+  will show up with different-looking IDs and, since discovery keys peers
+  by `peer_id`, effectively look like "new" peers to each other after the
+  upgrade. Expected and intentional — this is the whole point of moving
+  off unauthenticated UUIDs (see Phase 3.0's rationale). No user-facing
+  chat/file-transfer behavior changes; this only affects how peers are
+  identified.
+- Verified: full 15/15 existing test suite (unchanged, all still green),
+  plus new end-to-end coverage of `discovery.py`'s wiring: first-run
+  generation, reload consistency, rename, and rejection of a mismatched
+  `peer_id` on rename.
+
+### Note
+- Phase 3 delivers the identity primitive only — device_id is generated,
+  stored, and now used as `peer_id` in discovery. It is **not yet used
+  for anything cryptographic**: no signing, no verification, no
+  authenticated handshake. That's Phase 4 (Trust Store) and Phase 6
+  (Secure Handshake).
+
 ## [1.3.1] — Phase 3.1–3.3: Ed25519 device identity module
 
 ### Added
