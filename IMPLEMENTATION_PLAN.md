@@ -1737,6 +1737,45 @@ peerc/
 
 ---
 
+## Phase 39 — Secure Storage (at-rest encryption)
+
+**Depends on Phase 27** (Storage) — this phase encrypts data that Phase 27
+defines the schema for (`messages`, `transfers`); it can't start for real
+until that schema exists, or absorbs Phase 27's scope directly (see open
+decision below).
+
+Full design, threat model, and rationale: **`SECURE_STORAGE_DESIGN.md`**.
+Summary only, here:
+
+```
+DEK (AES-256, random, generated once)
+   │
+   ├── wrapped by KEK(passphrase)   — Scrypt(passphrase, salt)
+   └── wrapped by KEK(recovery code) — Scrypt(recovery code, salt)
+```
+
+- Passphrase doubles as the "login" — same passphrase unlocks the app AND
+  derives the key (via a KEK, never directly — see design doc for why).
+- Session model is deliberately "sudo-style": unlock once, auto-lock
+  after an idle timeout, and re-prompt for the passphrase on sensitive
+  actions specifically (export/decrypt, view/regenerate recovery code,
+  change passphrase) even mid-session.
+- Recovery code generated once at first identity setup, shown once,
+  never stored — only used once to derive a second wrapped copy of the
+  DEK, so losing the passphrase doesn't mean losing the data.
+- Two storage modes: **secure** (encrypted; chat history is always this)
+  and **normal** (plaintext; today's file-transfer behavior). Explicit
+  **export** flow decrypts a secure file to a normal-mode plaintext copy.
+- Viewer-cache leak (decrypted content surviving in an external viewer's
+  own cache/temp files) is a known gap — mitigated by rendering in-app
+  wherever possible rather than handing files to an OS-level viewer.
+
+**Status:** design only (see `SECURE_STORAGE_DESIGN.md` §8 for open
+decisions — KDF choice, whole-file vs. field-level DB encryption, exact
+relationship to Phase 27). No code yet.
+
+---
+
 ## Urutan implementasi yang disarankan
 
 Jangan mengikuti urutan struktur folder di atas secara mentah. Kerjakan
