@@ -8,6 +8,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - Nothing yet
 
+## [1.2.0] — Phase 1.2: protocol version field
+
+### Added
+- **`version` field on every message** (IMPLEMENTATION_PLAN.md Phase 1.2) —
+  `core/protocol/messages.py` gains `PROTOCOL_VERSION = 2`, and every
+  `make_*()` factory now stamps its output with `"version": PROTOCOL_VERSION`.
+  This is the hook future protocol changes (encryption, identity handshake)
+  will use to detect what a peer speaks before sending it something it
+  can't parse.
+- `validate_message()` now checks `version`: missing entirely is treated as
+  legacy version 1 (messages from a peer on a pre-1.2 build, before this
+  field existed) rather than rejected, but a non-int value or a version
+  below `MIN_SUPPORTED_VERSION` (currently 1) is rejected with
+  `ProtocolError`.
+
+### Compatibility
+- Wire-format-additive only — no existing field removed or renamed.
+  Verified against the full test suite (12 security/upgrade tests + 3 stage
+  sanity scripts, all passing) with no test changes required.
+
+## [1.1.1] — Phase 1.1: split protocol layer
+
+### Changed
+- **Protocol module restructured** (IMPLEMENTATION_PLAN.md Phase 1.1) —
+  `protocol.py` split into `core/protocol/{frame,messages,errors}.py`:
+  - `core/protocol/frame.py` — length-prefixed wire framing
+    (`encode_frame` / `read_frame` / `write_frame`), independent of message
+    semantics.
+  - `core/protocol/messages.py` — message type constants, `make_*` factory
+    functions, and `validate_message()` schema validation.
+  - `core/protocol/errors.py` — `ProtocolError`.
+  - Root `protocol.py` kept as a backward-compatible shim re-exporting the
+    same public API (`encode_message`/`read_message`/`write_message` alias
+    the renamed `encode_frame`/`read_frame`/`write_frame`), so
+    `chat.py`, `peer.py`, `file_transfer.py`, `ui.py`, and all existing
+    tests required no changes.
+- No behavior change. Verified via full test suite: 12/12
+  (`test_security_fixes.py`, `test_upgrade_fixes.py`) + 3/3 stage sanity
+  scripts (`test_stage2.py`–`test_stage4.py`), all passing.
+
 ## [1.0.0] — Initial release
 
 ### Added
