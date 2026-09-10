@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "p2p-chat"
-version = "1.4.0"
+version = "1.4.1"
 description = "Peer-to-peer terminal chat and file transfer application"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,4 +20,4 @@ pchat = "ui:main"
 
 [tool.setuptools]
 py-modules = ["chat", "discovery", "file_transfer", "peer", "protocol", "ui"]
-packages = ["core", "core.protocol", "core.identity"]
+packages = ["core", "core.protocol", "core.identity", "core.trust"]

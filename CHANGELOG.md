@@ -8,6 +8,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - Nothing yet
 
+## [1.4.1] — Phase 4.1: trust store (SQLite) + TOFU logic
+
+### Added
+- **`core/trust/` package** (IMPLEMENTATION_PLAN.md Phase 4) — standalone,
+  not yet wired into peer.py/discovery.py/ui.py (there's no handshake yet
+  to wire it into — that's Phase 6):
+  - `device.py` — `TrustedDevice` dataclass, `TrustStatus` enum
+    (`PENDING` / `TRUSTED` / `REVOKED`).
+  - `store.py` — `TrustStore`, backed by SQLite (stdlib `sqlite3`) at
+    `~/.p2p-chat/trust.db`, table `trusted_devices` matching the schema
+    in IMPLEMENTATION_PLAN.md. TOFU is deliberately split into a
+    **read-only** `check(device_id, public_key)` (returns `UNKNOWN` /
+    `PENDING` / `TRUSTED` / `KEY_CHANGED` / `REVOKED`) and separate
+    write operations (`record_first_seen`, `approve`) that only run on
+    an explicit caller action — `check()` never mutates state, and a
+    `public_key` mismatch for a known `device_id` is *never*
+    auto-corrected (that would defeat the point of TOFU: it's the signal
+    a human needs to see and decide about, not something to paper over).
+
+### Compatibility
+- Purely additive. Verified standalone: full TOFU life cycle (unknown →
+  first-seen/PENDING → approved/TRUSTED → key-change detection with the
+  stored key confirmed unchanged → re-insertion correctly rejected →
+  `last_seen` bump → filtered listing by status).
+
 ## [1.4.0] — Phase 3 complete: device identity wired in
 
 ### Changed
