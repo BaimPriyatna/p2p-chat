@@ -8,6 +8,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - Nothing yet
 
+## [1.3.0] — Phase 1.3: binary framing for file transfer
+
+**Note on versioning:** this change breaks file-transfer interop between
+peers on `<1.3.0` and `1.3.0+` (chat/handshake are unaffected). Kept as a
+MINOR bump rather than MAJOR — a deliberate call while still inside
+Phase 1 of active development with no external users yet; revisit this
+policy once there's a real install base to consider.
+
+### Changed
+- **File chunks now travel as raw binary frames instead of base64-in-JSON**
+  (IMPLEMENTATION_PLAN.md Phase 1.3, closes BUG-006/BUG-007). New module
+  `core/protocol/binary.py` defines the `file_data` wire layout: a fixed
+  28-byte header (16-byte UUID `transfer_id` + 4-byte `sequence` +
+  8-byte `offset`) followed by the raw chunk bytes — no JSON, no base64.
+  - Overhead per 64 KB chunk: **33.6% → 0.05%** (measured), roughly 25%
+    fewer bytes on the wire for a file transfer overall.
+  - `core/protocol/frame.py`: the length-prefix header now reserves its
+    top bit as an is-binary flag (`BINARY_FLAG`). Real payload lengths
+    never legitimately set that bit (max is 100 MB, the flag is bit 31),
+    so this is fully backward compatible with the existing
+    `[4-byte length][JSON payload]` format — old raw frames decode
+    identically. New: `read_any_frame()` (returns `("json", dict)` or
+    `("binary", bytes)`), `encode_binary_frame()` / `write_binary_frame()`.
+  - `peer.py`: `ConnectionManager._read_loop` now branches on frame kind;
+    binary frames are decoded and handed to `on_message` as a synthetic
+    `{"type": "file_data", ...}` dict, so no change was needed to the
+    `on_message` callback interface itself. New `ConnectionManager.send_binary()`.
+  - `file_transfer.py`: `_send_chunks` / `_handle_chunk` rewritten for the
+    binary path. `make_file_chunk`/the old `file_chunk` JSON type are no
+    longer used by the app (kept in `messages.py` for compatibility) —
+    replaced by `sequence`+`offset` validation, which is a strict
+    superset of the old chunk-index-only reorder check (BUG-008).
+  - The old per-chunk `is_last` flag is gone (no longer meaningful for a
+    binary frame without extra header cost); BUG-009's guarantee — a
+    transfer can't be declared done with incomplete bytes — is still
+    fully enforced in `_handle_done` (`bytes_received == size` AND
+    checksum match required before `file_complete_ack(success=True)`).
+
+### Compatibility
+- Non-file-transfer messages (chat, hello, etc.) are completely unaffected
+  — same JSON frames, same header size, same behavior.
+- 3 tests in `test_security_fixes.py` that hand-crafted `file_chunk`
+  messages were updated to craft binary `file_data` frames instead
+  (same attack scenarios: oversized chunk, out-of-order chunk, bogus
+  `file_done` checksum). `test_stage4.py` required zero changes since it
+  only exercises the public `offer_file()`/callback API.
+- Verified: 12/12 security+upgrade tests, 3/3 stage sanity scripts, plus
+  an ad hoc 5 MB / ~80-chunk end-to-end transfer with checksum
+  verification — all passing.
+
 ## [1.2.0] — Phase 1.2: protocol version field
 
 ### Added

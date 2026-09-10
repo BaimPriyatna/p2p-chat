@@ -17,6 +17,7 @@ Two names changed under the hood but are aliased here for compatibility:
 """
 
 from core.protocol import (
+    BINARY_FLAG,
     LENGTH_PREFIX_FORMAT,
     LENGTH_PREFIX_SIZE,
     MAX_CHAT_TEXT_SIZE,
@@ -25,6 +26,9 @@ from core.protocol import (
     PROTOCOL_VERSION,
     REQUIRED_FIELDS,
     ProtocolError,
+    decode_file_data,
+    encode_binary_frame,
+    encode_file_data,
     encode_frame as encode_message,
     make_chat_ack,
     make_chat_message,
@@ -38,12 +42,15 @@ from core.protocol import (
     make_hello,
     make_hello_ack,
     new_message_id,
+    read_any_frame,
     read_frame as read_message,
     validate_message,
+    write_binary_frame,
     write_frame as write_message,
 )
 
 __all__ = [
+    "BINARY_FLAG",
     "LENGTH_PREFIX_FORMAT",
     "LENGTH_PREFIX_SIZE",
     "MAX_CHAT_TEXT_SIZE",
@@ -52,6 +59,9 @@ __all__ = [
     "PROTOCOL_VERSION",
     "REQUIRED_FIELDS",
     "ProtocolError",
+    "decode_file_data",
+    "encode_binary_frame",
+    "encode_file_data",
     "encode_message",
     "make_chat_ack",
     "make_chat_message",
@@ -65,7 +75,9 @@ __all__ = [
     "make_hello",
     "make_hello_ack",
     "new_message_id",
+    "read_any_frame",
     "read_message",
     "validate_message",
+    "write_binary_frame",
     "write_message",
 ]

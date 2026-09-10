@@ -7,10 +7,10 @@ peer on the LAN sending a hand-crafted frame, not our own sender code.
 """
 
 import asyncio
-import base64
 import hashlib
 import os
 import shutil
+import uuid
 
 import file_transfer
 import protocol
@@ -19,6 +19,13 @@ from peer import ConnectionManager
 PORT_A = 7301
 PORT_B = 7302
 DOWNLOADS_B = "/tmp/peerc_sectest_downloads_b"
+
+
+async def send_chunk(manager, addr_key, transfer_id, sequence, offset, data: bytes):
+    """Craft and send a raw file_data binary frame, bypassing the sender's
+    own bookkeeping — these tests simulate a hostile/malformed peer."""
+    payload = protocol.encode_file_data(transfer_id, sequence, offset, data)
+    await manager.send_binary(addr_key, payload)
 
 
 async def setup():
@@ -81,7 +88,7 @@ async def test_path_traversal():
 async def test_oversized_declared_then_overflow_chunk():
     manager_a, manager_b, ft_b, addr_key, complete_events = await setup()
     try:
-        transfer_id = "overflow-1"
+        transfer_id = str(uuid.uuid4())  # binary file_data frames require a real UUID
         offer = protocol.make_file_offer(
             transfer_id, sender_id="", sender_name="atk",
             filename="small.bin", size=10, checksum="whatever",
@@ -91,9 +98,8 @@ async def test_oversized_declared_then_overflow_chunk():
         assert transfer_id in ft_b._incoming, "legit-looking small offer should be accepted"
 
         # Declared size = 10 bytes, but actually try to send far more.
-        big_chunk = base64.b64encode(os.urandom(10 * 1024 * 1024)).decode("ascii")
-        chunk_msg = protocol.make_file_chunk(transfer_id, 0, big_chunk, False)
-        await manager_a.send(addr_key, chunk_msg)
+        big_chunk = os.urandom(10 * 1024 * 1024)
+        await send_chunk(manager_a, addr_key, transfer_id, 0, 0, big_chunk)
         await asyncio.sleep(0.3)
 
         assert transfer_id not in ft_b._incoming, "oversized chunk should abort the transfer"
@@ -108,7 +114,7 @@ async def test_oversized_declared_then_overflow_chunk():
 async def test_chunk_index_reorder_rejected():
     manager_a, manager_b, ft_b, addr_key, complete_events = await setup()
     try:
-        transfer_id = "reorder-1"
+        transfer_id = str(uuid.uuid4())
         offer = protocol.make_file_offer(
             transfer_id, sender_id="", sender_name="atk",
             filename="reorder.bin", size=100, checksum="whatever",
@@ -116,9 +122,8 @@ async def test_chunk_index_reorder_rejected():
         await manager_a.send(addr_key, offer)
         await asyncio.sleep(0.2)
 
-        # Skip straight to index 3 without sending 0,1,2.
-        bad_chunk = protocol.make_file_chunk(transfer_id, 3, base64.b64encode(b"x" * 10).decode(), False)
-        await manager_a.send(addr_key, bad_chunk)
+        # Skip straight to sequence 3 (and offset 30) without sending 0,1,2.
+        await send_chunk(manager_a, addr_key, transfer_id, 3, 30, b"x" * 10)
         await asyncio.sleep(0.2)
 
         assert transfer_id not in ft_b._incoming, "out-of-order chunk should abort the transfer"
@@ -132,7 +137,7 @@ async def test_chunk_index_reorder_rejected():
 async def test_file_done_checksum_cannot_override_offer():
     manager_a, manager_b, ft_b, addr_key, complete_events = await setup()
     try:
-        transfer_id = "chk-1"
+        transfer_id = str(uuid.uuid4())
         real_data = b"hello world, this is the real payload"
         real_checksum = hashlib.sha256(real_data).hexdigest()
 
@@ -143,10 +148,7 @@ async def test_file_done_checksum_cannot_override_offer():
         await manager_a.send(addr_key, offer)
         await asyncio.sleep(0.2)
 
-        chunk = protocol.make_file_chunk(
-            transfer_id, 0, base64.b64encode(real_data).decode("ascii"), True,
-        )
-        await manager_a.send(addr_key, chunk)
+        await send_chunk(manager_a, addr_key, transfer_id, 0, 0, real_data)
         await asyncio.sleep(0.2)
 
         # Sender tries to claim a DIFFERENT (bogus) checksum in file_done —

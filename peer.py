@@ -101,9 +101,19 @@ class ConnectionManager:
     async def _read_loop(self, conn: Connection) -> None:
         try:
             while True:
-                message = await protocol.read_message(conn.reader)
-                protocol.validate_message(message)  # raises ProtocolError if malformed
-                await self.on_message(conn.addr_key, message)
+                kind, payload = await protocol.read_any_frame(conn.reader)
+                if kind == "json":
+                    protocol.validate_message(payload)  # raises ProtocolError if malformed
+                    await self.on_message(conn.addr_key, payload)
+                else:
+                    # Binary frame (Phase 1.3): currently only used for
+                    # file_data chunks. Decode into a dict shape so the
+                    # on_message callback interface doesn't need to change —
+                    # FileTransferSession._dispatch treats "file_data" like
+                    # any other message type.
+                    decoded = protocol.decode_file_data(payload)  # raises ProtocolError if too short
+                    decoded["type"] = "file_data"
+                    await self.on_message(conn.addr_key, decoded)
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass  # peer disconnected
         except protocol.ProtocolError:
@@ -113,12 +123,25 @@ class ConnectionManager:
             conn.writer.close()
 
     async def send(self, addr_key: str, message: dict) -> bool:
-        """Send a message on an already-open connection. Returns False if not connected."""
+        """Send a JSON control message on an already-open connection. Returns False if not connected."""
         conn = self._connections.get(addr_key)
         if conn is None:
             return False
         try:
             protocol.write_message(conn.writer, message)
+            await conn.writer.drain()
+            return True
+        except (ConnectionResetError, BrokenPipeError):
+            self._connections.pop(addr_key, None)
+            return False
+
+    async def send_binary(self, addr_key: str, payload: bytes) -> bool:
+        """Send a raw binary frame (Phase 1.3: file_data chunks). Returns False if not connected."""
+        conn = self._connections.get(addr_key)
+        if conn is None:
+            return False
+        try:
+            protocol.write_binary_frame(conn.writer, payload)
             await conn.writer.drain()
             return True
         except (ConnectionResetError, BrokenPipeError):

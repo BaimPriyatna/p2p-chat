@@ -11,16 +11,16 @@ Wire flow:
     ------                              --------
     file_offer  ------------------->    (asks on_offer_received callback)
                 <-----------------      file_accept  (or file_reject, and stop)
-    file_chunk (N times) ----------->   (writes bytes to disk incrementally)
+    file_data (binary, N times) --->   (writes bytes to disk incrementally)
     file_done (with checksum) ----->    (verifies checksum, calls on_complete)
 
-Chunks are base64-encoded inside the existing JSON frame format for
-simplicity/consistency with the rest of the protocol. This has real
-overhead (~33%) — acceptable for Stage 4; noted in README Known Limitations.
+Chunks travel as raw binary frames (Phase 1.3) — a 28-byte header
+(transfer_id + sequence + offset) followed by the chunk bytes, no base64
+and no JSON. Only the control messages around a transfer (file_offer,
+file_accept/reject, file_done, file_complete_ack) are JSON.
 """
 
 import asyncio
-import base64
 import hashlib
 import os
 import time
@@ -113,7 +113,7 @@ class FileTransferSession:
             "file_offer": self._handle_offer,
             "file_accept": self._handle_accept,
             "file_reject": self._handle_reject,
-            "file_chunk": self._handle_chunk,
+            "file_data": self._handle_chunk,
             "file_done": self._handle_done,
             "file_complete_ack": self._handle_complete_ack,
         }
@@ -178,12 +178,10 @@ class FileTransferSession:
                     chunk = f.read(CHUNK_SIZE)
                     if not chunk:
                         break
+                    offset = bytes_sent
                     bytes_sent += len(chunk)
-                    is_last = bytes_sent >= transfer.size
-                    msg = protocol.make_file_chunk(
-                        transfer.transfer_id, index, base64.b64encode(chunk).decode("ascii"), is_last,
-                    )
-                    ok = await self.manager.send(transfer.addr_key, msg)
+                    payload = protocol.encode_file_data(transfer.transfer_id, index, offset, chunk)
+                    ok = await self.manager.send_binary(transfer.addr_key, payload)
                     if not ok:
                         transfer.status = "failed"
                         if self.on_complete:
@@ -302,13 +300,17 @@ class FileTransferSession:
             return
 
         # BUG-008: reject out-of-order chunks rather than silently
-        # concatenating whatever arrives.
-        chunk_index = message["chunk_index"]
-        if chunk_index != transfer.expected_chunk_index:
+        # concatenating whatever arrives. Binary file_data frames carry
+        # both a sequence number and an explicit byte offset (Phase 1.3);
+        # checking both catches a wider range of hostile/corrupt input
+        # than sequence alone would.
+        sequence = message["sequence"]
+        offset = message["offset"]
+        if sequence != transfer.expected_chunk_index or offset != transfer.bytes_received:
             await self._abort_incoming(transfer, "out-of-order chunk")
             return
 
-        data = base64.b64decode(message["data"])
+        data = message["data"]
 
         # BUG-002: enforce the size the sender declared in file_offer —
         # never let actual bytes on disk exceed it.
@@ -319,13 +321,6 @@ class FileTransferSession:
         transfer._file_handle.write(data)
         transfer.bytes_received += len(data)
         transfer.expected_chunk_index += 1
-
-        # BUG-009: is_last should actually mean something — a peer claiming
-        # "last chunk" without having sent all declared bytes is lying.
-        is_last = bool(message.get("is_last"))
-        if is_last and transfer.bytes_received != transfer.size:
-            await self._abort_incoming(transfer, "is_last with incomplete bytes")
-            return
 
         if self.on_progress:
             self.on_progress(transfer.transfer_id, transfer.bytes_received, transfer.size)

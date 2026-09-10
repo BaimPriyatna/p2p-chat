@@ -10,12 +10,17 @@ sites keep working unchanged.
 """
 
 from .errors import ProtocolError
+from .binary import decode_file_data, encode_file_data
 from .frame import (
+    BINARY_FLAG,
     LENGTH_PREFIX_FORMAT,
     LENGTH_PREFIX_SIZE,
     MAX_MESSAGE_SIZE,
+    encode_binary_frame,
     encode_frame,
+    read_any_frame,
     read_frame,
+    write_binary_frame,
     write_frame,
 )
 from .messages import (
@@ -40,11 +45,17 @@ from .messages import (
 
 __all__ = [
     "ProtocolError",
+    "BINARY_FLAG",
     "LENGTH_PREFIX_FORMAT",
     "LENGTH_PREFIX_SIZE",
     "MAX_MESSAGE_SIZE",
+    "decode_file_data",
+    "encode_binary_frame",
+    "encode_file_data",
     "encode_frame",
+    "read_any_frame",
     "read_frame",
+    "write_binary_frame",
     "write_frame",
     "MAX_CHAT_TEXT_SIZE",
     "MIN_SUPPORTED_VERSION",
