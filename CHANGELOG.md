@@ -8,6 +8,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - Nothing yet
 
+## [1.5.0] — Phase 4 complete: trust store + TOFU + revocation
+
+### Added
+- **`core/trust/revocation.py`** (Phase 4.2) — `revoke_device(store,
+  device_id, revoked_by, reason=None)`: marks a device `REVOKED` locally
+  and records an audit trail (`revoked_by`, `revoked_at`, `revoke_reason`).
+  `is_revoked()` convenience check.
+  - **Local-only for this phase, by design**: revocation isn't propagated
+    to any other peer yet — there's no authenticated channel to send it
+    over until Phase 6's handshake exists. Propagation is explicitly
+    deferred, not forgotten.
+  - Once `REVOKED`, a device can't silently become `TRUSTED` again —
+    both `revoke_device()` (double-revoke) and `TrustStore.approve()`
+    (approving a revoked device) refuse and raise rather than allow a
+    quiet reversal.
+
+### Compatibility
+- Purely additive. Verified: revoke records a correct audit trail,
+  double-revoke and revoke-unknown-device are rejected, `approve()`
+  correctly refuses a revoked device, and `TrustStore.check()` reports
+  `REVOKED` afterward. Existing 15/15 test suite unaffected.
+
+### Note
+- Phase 4 (this release) delivers `core/trust/` as a complete, standalone,
+  tested primitive — TOFU evaluation, approval, and local revocation all
+  work and are covered by tests. It is **not yet wired into any actual
+  peer connection** (`peer.py`, `discovery.py`, `ui.py` are untouched):
+  there's no cryptographic handshake yet for a `device_id`/`public_key`
+  pair to be checked *against*. That wiring happens in Phase 6 (Secure
+  Handshake), once a peer connection actually carries a signed identity
+  to check trust against.
+
 ## [1.4.1] — Phase 4.1: trust store (SQLite) + TOFU logic
 
 ### Added
