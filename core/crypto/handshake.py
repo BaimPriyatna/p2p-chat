@@ -91,6 +91,15 @@ class HandshakeResult:
     transcript_hash: bytes     # 32 bytes SHA256 of full transcript
     trust_decision: TrustDecision
 
+    def derive_session_keys(self, is_initiator: bool) -> "SessionKeys":
+        """Derive directional session keys (Phase 7) from this handshake's result."""
+        from .kdf import derive_session_keys
+        return derive_session_keys(
+            shared_secret=self.shared_secret,
+            salt=self.transcript_hash,
+            is_initiator=is_initiator,
+        )
+
 
 class NonceCache:
     """Thread/asyncio safe set of seen nonces within an expiry window to prevent replay."""

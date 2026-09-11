@@ -2,6 +2,7 @@
 
     key_exchange.py — Ephemeral X25519 keypair generation and DH exchange (Phase 6.1)
     handshake.py    — Secure authenticated handshake state machine & transport (Phase 6.2)
+    kdf.py          — HKDF-SHA256 session key derivation (Phase 7)
 """
 
 from .handshake import (
@@ -20,6 +21,11 @@ from .handshake import (
     compute_responder_transcript,
     perform_handshake_initiator,
     perform_handshake_responder,
+)
+from .kdf import (
+    KDFError,
+    SessionKeys,
+    derive_session_keys,
 )
 from .key_exchange import (
     EphemeralKeypair,
@@ -50,4 +56,8 @@ __all__ = [
     "compute_final_transcript_hash",
     "perform_handshake_initiator",
     "perform_handshake_responder",
+    "KDFError",
+    "SessionKeys",
+    "derive_session_keys",
 ]
+

@@ -8,6 +8,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - Nothing yet
 
+## [1.7.0] — Phase 7 complete: session key derivation (X25519 + HKDF)
+
+### Added
+- **`core/crypto/kdf.py`** (Phase 7):
+  - HKDF-SHA256 (RFC 5869) session key derivation: `derive_session_keys(shared_secret, salt, is_initiator)`.
+  - Cryptographic domain separation with distinct context tags:
+    - `b"peerc-v2:initiator-to-responder"` (32-byte key)
+    - `b"peerc-v2:responder-to-initiator"` (32-byte key)
+    - `b"peerc-v2:session-id"` (16-byte unique session identifier)
+  - Directional keys via `SessionKeys` (`send_key`, `recv_key`, `session_id`):
+    - Guaranteed symmetry: initiator's `send_key` matches responder's `recv_key`, and initiator's `recv_key` matches responder's `send_key`.
+    - Key separation: `send_key != recv_key` on the same host, preventing reflection and cross-direction key reuse attacks.
+  - Transcript hash binding: uses the 32-byte authenticated handshake transcript hash as HKDF salt, ensuring derived session keys are strictly bound to the exact authenticated session.
+  - Safe key representation: `SessionKeys.__repr__` masks raw key material (`***`) preventing accidental secret leakage in console logs or tracebacks.
+  - Error handling: `KDFError` for invalid types or invalid key/salt lengths.
+- **`core/crypto/handshake.py`**:
+  - Added convenience method `HandshakeResult.derive_session_keys(is_initiator: bool) -> SessionKeys`.
+- **`core/crypto/__init__.py`**:
+  - Re-exports `KDFError`, `SessionKeys`, and `derive_session_keys`.
+- **`tests/test_kdf.py`**:
+  - Automated tests covering determinism, directional symmetry, key separation, transcript binding (avalanche effect), shared secret sensitivity, input validation, masked repr, and end-to-end TCP loopback integration with `perform_handshake_initiator` and `perform_handshake_responder`.
+- **`.github/workflows/tests.yml`**:
+  - Added `tests/test_kdf.py` to the CI pytest suite.
+
+### Compatibility
+- Additive module. No breaking changes. Version bumped to `1.7.0` (MINOR: whole phase complete).
+
 ## [1.6.0] — Phase 6 complete: secure authenticated handshake
 
 ### Added
