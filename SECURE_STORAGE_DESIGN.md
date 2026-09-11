@@ -1,9 +1,8 @@
 # Secure Storage — Design Document
 
-Status: **planning only — no code written yet.** This document exists to
-pin down the design before implementation starts (Phase 39 in
-IMPLEMENTATION_PLAN.md). Several open decisions are marked explicitly and
-need to be resolved before coding begins.
+Status: **planning only — no code written yet.** All design decisions
+(§11) are now resolved. This document is the reference for implementation
+once Phase 39 starts (see IMPLEMENTATION_PLAN.md).
 
 ## 1. What this protects against (threat model)
 
@@ -78,10 +77,11 @@ use):
   regardless of where the wrapped-DEK bytes are physically stored.**
 - Changing the passphrase later = re-wrap the DEK under a new KEK.
   Nothing already encrypted needs to be touched.
-- KDF: **Scrypt**, via `cryptography.hazmat.primitives.kdf.scrypt` — this
-  library is already a dependency (Phase 3), so this adds no new
-  dependency. (Open decision — see §11: Argon2id is the more commonly
-  recommended default today; using it would mean adding `argon2-cffi`.)
+- KDF: **Scrypt** (decided — see §11 for the comparison against
+  Argon2id), via `cryptography.hazmat.primitives.kdf.scrypt` — already a
+  dependency (Phase 3), no new dependency added. Migrating to Argon2id
+  later, if ever wanted, is cheap under this envelope design: re-wrap
+  the DEK under a new KEK, no stored data needs to be touched.
 
 ## 3. Recovery code
 
@@ -103,8 +103,10 @@ different risk profiles and should not share one friction level.
   (passphrase entered, DEK in memory), reading and sending text messages
   needs no further prompts. Text never leaves the app's own
   in-memory-rendered UI — there's no external viewer, no exported copy,
-  no execution risk. Auto-lock after N minutes idle (configurable) still
-  applies at the app level, same idea as a sudo timestamp expiring.
+  no execution risk. **Auto-lock after 5 minutes idle by default**
+  (user-configurable — decided by matching `sudo`'s own well-known
+  default timestamp timeout, the exact analogy this session model is
+  based on), same idea as a sudo timestamp expiring.
 - **File actions: key required every time, by default.** Open, Export,
   Move to Secure Storage, and Delete do **not** reuse the app's unlock
   state — each one re-prompts for the passphrase independently,
@@ -127,12 +129,31 @@ different risk profiles and should not share one friction level.
   - **"Don't ask again this session"** — a per-session toggle that skips
     re-prompting for file actions once enabled, falling back to the
     ordinary app-level unlock state (closer to how chat already works).
-  - **A separate "critical action" key** — an optional *second*,
-    distinct secret specifically for the highest-risk actions (Export
-    is the clear candidate: it's the one action that permanently removes
-    a file from protection). Lets someone run day-to-day Opens off their
-    main passphrase/session while still gating Export behind something
-    extra.
+  - **A separate "critical action" key for Export** (decided — see §11
+    for how this was refined). **Not** a second independent wrap on the
+    DEK sitting alongside the passphrase's wrap — that would just be a
+    second parallel lock on the same door: compromising *either* secret
+    is then enough, which adds an attack surface without adding real
+    protection. Instead: entry is sequential and both are required to
+    combine —
+    1. The already-unlocked session's passphrase-derived key material
+       (proof the main passphrase was entered correctly this session).
+    2. A freshly-entered critical-action secret, entered right after,
+       specifically for this action.
+    These two are combined (HKDF) into a single authorization value used
+    to gate the Export operation. Neither one alone is sufficient:
+    having only the critical-action secret without an unlocked
+    passphrase session doesn't work, and having only the unlocked
+    session without the critical-action secret doesn't work either. UI
+    stays simple either way — enter the main passphrase (if not already
+    unlocked this session), then enter the extra key, in sequence. The
+    extra key's *entry method* can be a typed secret or a device
+    biometric (fingerprint/face/PIN) — but biometrics are always
+    delegated to the OS's own biometric API (`fprintd` on Linux, Windows
+    Hello, Touch/Face ID on macOS), which only returns a yes/no plus
+    releases a device-bound secret. This app never handles raw
+    biometric data itself — implementing biometric matching ourselves
+    would be well outside this project's scope and needlessly risky.
   - Whatever the user configures, this is about **convenience vs.
     friction, not about weakening what's encrypted** — the DEK is still
     only ever unwrapped via a passphrase-derived KEK (§2); "don't ask
@@ -164,7 +185,7 @@ something is, not something the user has to track per-item.
   (AES-256-GCM), key derived per-file via HKDF from the DEK plus a random
   per-file salt, alongside the ciphertext. "Normal" mode files behave
   exactly as file transfer works today (plaintext on disk).
-- **`trust.db`** (Phase 4) — open decision, see §11.
+- **`trust.db`** (Phase 4) and the storage database — decided, see below.
 - **Important clarification on "device identity" in the encrypted
   database**: only the *public* metadata (`device_id`, `public_key`,
   `name`, `created_at` — same shape as `identity_file.py`'s current
@@ -176,23 +197,24 @@ something is, not something the user has to track per-item.
   "device identity" into "encrypted database" reads ambiguously on this
   point otherwise.
 
-### Whole-database vs. field-level encryption — open decision (§11)
+### Database encryption — decided: whole-file via in-memory SQLite
 
-Two real options, with different dependency and query-performance
-trade-offs:
+Neither of the two options originally framed (SQLCipher whole-file vs.
+plain-`sqlite3` field-level) won outright, so a third option was chosen
+instead: **encrypt the entire database file as one blob at rest; when
+unlocked, decrypt it into `sqlite3.connect(':memory:')` (or a
+tmpfs-backed file) for the session; re-encrypt and flush back to disk on
+lock/exit, plus periodic auto-flush.**
 
-- **A. Whole-file encryption** (e.g. SQLCipher): the entire SQLite file
-  is ciphertext. Strongest protection (no metadata leaks at all), but
-  needs a new native dependency (`pysqlcipher3` or similar) — a bigger
-  ask than anything added so far (`cryptography`/`keyring` are pure
-  Python + stdlib-adjacent).
-- **B. Field-level encryption**: keep plain `sqlite3` (stdlib, already in
-  use), encrypt only sensitive column values (message text, filenames,
-  attachment paths) with the DEK before writing. Metadata needed for
-  queries/sorting (timestamps, device_id, message_id, status) stays
-  plaintext. Weaker (an attacker with the file learns who-talked-to-whom-
-  when, just not content) but zero new dependencies and keeps everything
-  else about the storage layer unchanged.
+This gets whole-file-equivalent protection — no metadata leaks at all,
+since the on-disk artifact is always fully ciphertext — using only the
+stdlib `sqlite3` module and the already-present `cryptography` dependency
+for the encrypt/decrypt step. No SQLCipher, no new native dependency, no
+Python-binding-maintenance risk. Trade-off worth tracking during
+implementation: a crash between the last flush and the next one risks
+losing recent writes — mitigate with a reasonably frequent auto-flush
+interval and/or flushing after any write considered important enough not
+to lose (e.g. after each new message, not just periodically).
 
 ## 6. File lifecycle, naming, and actions
 
@@ -218,17 +240,25 @@ secure file at all.
   still not a full guarantee.
   - **Must never execute the file.** "Open" means view/preview only —
     it must never result in the decrypted content running as a program.
-    Concretely: strip executable permission bits from the decrypted temp
-    file regardless of what it had before encryption; refuse to hand a
-    file with an executable/script extension (`.exe`, `.sh`, `.py`,
-    `.bat`, `.app`, etc. — needs a real list, not just these examples)
-    to the OS's default-handler mechanism at all, showing a clear "this
-    file type can't be opened, only exported" message instead of
-    guessing whether the OS would run it. Applies even if the original
-    file's *true* type doesn't match its extension — extension-sniffing
-    alone isn't a safe way to decide "is this executable," so this needs
-    a real design pass (magic-byte/content sniffing, not just filename)
-    before implementation, not something to hand-wave in this doc.
+    Strip executable permission bits from the decrypted temp file
+    regardless of what it had before encryption. **Detection method
+    (decided): custom magic-byte/content sniffing, not a third-party
+    library and not an extension blocklist alone.** Check the actual
+    file header against the small set of executable/script signatures —
+    `MZ` (Windows PE), `\x7fELF` (Linux ELF), Mach-O magic numbers
+    (macOS), `#!` shebang (scripts) — narrow enough in scope to implement
+    directly without adding a dependency like `python-magic`/`libmagic`
+    (which would bring the same native-dependency concern as the
+    database-encryption question above, for a problem that's actually
+    much narrower than general MIME-type detection). Extension is kept
+    only as a secondary UX signal (e.g. flag *harder* if the extension
+    disagrees with the sniffed content), never the sole basis for the
+    decision — a renamed executable must still be caught by content, not
+    missed because its extension said `.txt`. **When detection is
+    inconclusive, fail closed: block Open, direct the user to Export
+    instead.** Export remains available either way, so failing closed
+    here doesn't lock anyone out of their own file — it just adds one
+    extra explicit step for anything ambiguous.
 - **Export** — decrypt and write a **permanent plaintext copy** outside
   secure storage, at a location the user picks. This is the one that
   actually removes protection from the data (see §8: export flow). Shown
@@ -338,36 +368,66 @@ Mitigation, in order of preference:
    concern — worth taking as confirmation this is a real, not
    theoretical, gap.)
 
-## 11. Open decisions (need a decision before coding starts)
+## 11. Decisions
 
-1. **KDF**: Scrypt (no new dependency, already available via
-   `cryptography`) vs. Argon2id (more commonly recommended today, needs
-   `argon2-cffi`).
-2. **Database encryption**: whole-file (SQLCipher, new native dependency)
-   vs. field-level (stdlib `sqlite3`, weaker but zero new dependencies).
-3. **Phase ordering**: does Phase 27 (Storage) need to be fully built
-   first, or can this phase define the encrypted schema directly and
-   effectively absorb Phase 27's scope?
-4. **Auto-lock timeout**: default idle duration before re-locking, and
-   whether it's user-configurable. — *partially resolved*: confirmed
-   user-configurable (§4); default duration itself still open.
-5. ~~Per-file vs. global secure/normal default~~ — **resolved**:
-   per-transfer choice, shown on the incoming-file accept dialog
-   (Normal/Secure radio, defaulting to Secure — consistent with "chat is
-   always secure," files default to the safer option with an easy
-   opt-out per transfer rather than the other way around).
-6. **Executable/script detection for the "Open never executes" rule**
-   (§6): needs a real content-sniffing approach (magic bytes / MIME
-   detection), not just a file-extension blocklist — an extension alone
-   is trivially wrong (renamed executable) or trivially annoying (a
-   `.py` file that's actually just text someone's sharing). What
-   library/approach, and what happens when detection is inconclusive
-   (block by default, or warn-and-allow)?
-7. **Critical-action key mechanics**: does the optional second key for
-   Export (§4) get its own independent envelope-encryption setup (its
-   own KEK wrapping a *different* purpose-specific key), or does it
-   simply gate the UI step (still unwraps the same DEK, just requires a
-   second correct secret before the Export button does anything)? The
-   latter is simpler; the former is more genuinely "two keys with
-   independent compromise value" but adds real complexity for a feature
-   that's opt-in and off by default.
+All resolved as of the latest round of discussion (criteria weighed:
+LTS/long-term relevance, security, minimal development conflict,
+user comfort, stability). Kept here as a record of the reasoning, not as
+open questions anymore.
+
+1. **KDF: Scrypt.** Already available via the `cryptography` dependency
+   (Phase 3) — wins on minimal-dev-conflict and stability outright, and
+   is still a solid memory-hard KDF on security. Argon2id (the more
+   commonly recommended default today, per OWASP) was the stronger
+   option on pure security/LTS grounds but needs a new native dependency
+   (`argon2-cffi`); rejected for now given the envelope design makes a
+   later migration cheap (re-wrap the DEK, no stored data touched) if it
+   ever matters more than it does today. PBKDF2 (stdlib `hashlib`, even
+   fewer dependencies than Scrypt) was considered and rejected — it adds
+   no benefit over Scrypt since Scrypt is already dependency-free here,
+   while being meaningfully weaker (not memory-hard).
+2. **Database encryption: whole-file via in-memory/tmpfs SQLite** (§5),
+   not SQLCipher (native dependency, uneven Python-binding maintenance
+   history) and not field-level (leaves metadata readable). This option
+   wasn't in the original two-way framing — it was added because it
+   satisfies security (no metadata leak at all, same as SQLCipher) *and*
+   minimal-dev-conflict/stability (stdlib `sqlite3` + already-present
+   `cryptography`, no new dependency) simultaneously, rather than forcing
+   a trade-off between them.
+3. **Phase ordering: absorbed, not sequenced.** Phase 27 (Storage) is
+   folded into this phase rather than shipped first as a standalone,
+   unencrypted release — chat history should never exist on disk in
+   plaintext even temporarily between "Phase 27 ships" and "Phase 39
+   catches up." Implementation still proceeds in small, independently
+   tested sub-steps (schema first, encryption layer next), matching the
+   PATCH-per-substep discipline used in every phase so far — just not
+   released as two separate phases with a plaintext-persistence gap
+   between them.
+4. **Auto-lock timeout: 5 minutes by default, user-configurable.**
+   Matches `sudo`'s own well-known default timestamp timeout — the exact
+   analogy this whole session model is built on, so it's a deliberately
+   recognizable default rather than an arbitrary number.
+5. **Per-file vs. global secure/normal default: per-transfer choice**,
+   shown on the incoming-file accept dialog (Normal/Secure radio,
+   defaulting to Secure).
+6. **Executable/script detection: custom magic-byte sniffing** (§6), not
+   a third-party library (`python-magic` would add the same
+   native-dependency concern as SQLCipher, for a narrower problem than
+   general MIME detection actually requires) and not an extension
+   blocklist alone (spoofable). Fails closed — Open is blocked, not
+   allowed-with-a-warning, when detection is inconclusive; Export stays
+   available as the explicit fallback either way.
+7. **Critical-action key mechanics: sequential key-combining, not
+   parallel wrapping** (§4). Flagged during discussion as a real gap in
+   the original framing: two independently-wrapped copies of the DEK
+   (main passphrase OR critical-action key, either sufficient alone) is
+   an OR-gate — compromising *either* secret is enough, which adds an
+   attack surface without adding protection. Resolved instead as an
+   AND-gate: the already-unlocked session's key material and a
+   freshly-entered critical-action secret are combined (HKDF) into the
+   value that actually authorizes Export, so neither secret alone is
+   sufficient. UI-wise this is still just "enter a key" — sequentially,
+   main passphrase (if not already unlocked) then the extra key —
+   optionally satisfiable via an OS-level biometric prompt instead of
+   typing, always delegated to the OS's own biometric API rather than
+   this app handling raw biometric data itself.

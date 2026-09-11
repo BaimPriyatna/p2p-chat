@@ -1789,9 +1789,11 @@ DEK (AES-256, random, generated once)
   own cache/temp files) is a known gap — mitigated by rendering in-app
   wherever possible rather than handing files to an OS-level viewer.
 
-**Status:** design only (see `SECURE_STORAGE_DESIGN.md` §11 for open
-decisions — KDF choice, whole-file vs. field-level DB encryption, exact
-relationship to Phase 27). No code yet.
+**Status:** design fully resolved (see `SECURE_STORAGE_DESIGN.md` §11 —
+Scrypt for KDF, whole-file-via-in-memory-SQLite for DB encryption, Phase
+27 absorbed rather than sequenced, 5-minute default auto-lock, custom
+magic-byte executable detection, key-combining for the critical-action
+key). No code yet — this is the reference doc for implementation.
 
 ---
 
