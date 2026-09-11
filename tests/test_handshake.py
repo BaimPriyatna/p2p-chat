@@ -159,6 +159,7 @@ async def test_successful_mutual_handshake():
         try:
             server_res = None
             server_err = None
+            server_done = asyncio.Event()
 
             async def handle_client(reader, writer):
                 nonlocal server_res, server_err
@@ -174,6 +175,7 @@ async def test_successful_mutual_handshake():
                         await writer.wait_closed()
                     except OSError:
                         pass
+                    server_done.set()
 
             server = await asyncio.start_server(handle_client, host="127.0.0.1", port=0)
             port = server.sockets[0].getsockname()[1]
@@ -189,10 +191,11 @@ async def test_successful_mutual_handshake():
             except OSError:
                 pass
 
-            # Yield to the event loop so the server callback has a chance
-            # to finish before we assert. Required on Python < 3.12 where
-            # the task scheduling order differs from 3.12.
-            await asyncio.sleep(0)
+            # Wait for the server handler to fully complete before asserting.
+            # server.close() would cancel any still-running handler task with
+            # CancelledError (a BaseException, not Exception), so we must
+            # ensure the handler finishes *before* we close the server.
+            await asyncio.wait_for(server_done.wait(), timeout=5.0)
 
             server.close()
             await server.wait_closed()
