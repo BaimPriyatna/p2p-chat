@@ -1981,3 +1981,70 @@ Jadi user **tidak dipaksa**, tetapi user yang pakai terminal besar
 **mendapat pengalaman yang lebih kaya**. Sebaliknya, user di terminal
 kecil tetap bisa pakai peerc tanpa diblokir — hanya layout yang
 lebih sederhana.
+
+---
+
+## 41. In-App File Viewer — Document, Media, Text
+
+> Dokumen spesifikasi arsitektur lengkap: [`FILE_VIEWER_DESIGN.md`](./FILE_VIEWER_DESIGN.md)
+
+Untuk mendukung eksplorasi file yang dibagikan antar-peer dan file di dalam
+Secure Storage tanpa membocorkan cache plaintext ke filesystem OS
+(mitigasi `SECURE_STORAGE_DESIGN.md` §10), `peerc` mengintegrasikan
+file viewer berbasis in-memory streaming dengan 3 kategori:
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ [Esc / q] Tutup Viewer       proposal_draft.pdf (Hal 2/14) │
+├────────────────────────────────────────────────────────────┤
+│                                                            │
+│  ## Executive Summary                                      │
+│                                                            │
+│  Sistem transfer P2P berbasis enkripsi ChaCha20-Poly1305   │
+│  dengan authenticated handshake Ed25519 + X25519.          │
+│                                                            │
+│  ┌───────────────────────────────┐                         │
+│  │ [Diagram Arsitektur Visual]   │                         │
+│  │ (Rendered via Kitty/Halfblock)│                         │
+│  └───────────────────────────────┘                         │
+│                                                            │
+├────────────────────────────────────────────────────────────┤
+│ [n] Next Page  [p] Prev Page  [j/k] Scroll  [Ctrl+O] Open  │
+└────────────────────────────────────────────────────────────┘
+```
+
+### 1. Kategori & Stack Open-Source
+
+1. **Text & Code** (`.txt`, `.py`, `.md`, `.json`, `.csv`, `.log`):
+   - **Markdown**: Textual native `MarkdownViewer` (TOC otomatis + link navigasi).
+   - **Syntax Highlighting**: `rich.syntax.Syntax` + Pygments (nomor baris + tema konsisten).
+   - **Data Tabular**: Textual `DataTable` (CSV/TSV grid).
+   - **External Pager**: `bat` melalui `stdin` anonymous pipe (`bat --paging=always -`).
+
+2. **Media** (Gambar, Audio, Video):
+   - **Image** (`.png`, `.jpg`, `.webp`, `.gif`):
+     - In-memory `Pillow` + Textual canvas viewer.
+     - Auto-detect protokol emulator: **Kitty Graphics Protocol** / **Sixel** untuk resolusi penuh, atau fallback universal ke **ANSI Truecolor Half-blocks** (`▀`, `▄`).
+     - Tool CLI: `chafa -` atau `viu -` via `stdin`.
+   - **Audio** (`.mp3`, `.wav`, `.flac`, `.ogg`):
+     - In-memory decoding: Python `miniaudio`.
+     - Headless streaming: `mpv --no-video -` dengan IPC socket untuk kontrol play/pause/timeline.
+   - **Video** (`.mp4`, `.webm`):
+     - Thumbnail poster extraction in-memory + streaming playback via `mpv -`.
+
+3. **Document** (`.pdf`, `.epub`, `.docx`, `.xlsx`):
+   - **PDF & EPUB**:
+     - Engine utama: [`PyMuPDF`](https://github.com/pymupdf/PyMuPDF) (`fitz`).
+     - Dibaca langsung dari `stream=decrypted_bytes` di RAM.
+     - Dual mode: **Text Mode** (ekstraksi teks Markdown per-halaman) dan **Visual Mode** (render raster pixmap ke image engine).
+   - **Spreadsheet (`.xlsx`)**:
+     - `openpyxl` stream -> Textual `DataTable` atau integrasi TUI [`VisiData`](https://www.visidata.org/).
+
+### 2. Keamanan: Zero Disk Footprint
+
+- **100% In-Memory**: Data terdekripsi dari Secure Storage tidak pernah
+  disimpan ke file disk biasa saat di-preview.
+- **Anonymous Pipe**: External CLI tools (`bat`, `chafa`, `mpv`) hanya
+  menerima stream data melalui `sys.stdin` pipe, mencegah kebocoran
+  ke recent files atau temporary storage OS.
+

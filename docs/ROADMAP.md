@@ -30,6 +30,7 @@ Store), Phase 6 (Secure Handshake), and Phase 7 (Session Keys) are complete.**
 | Phase | What | Where |
 |---|---|---|
 | 39 | Secure Storage (at-rest encryption: passphrase/recovery-code envelope encryption, encrypted vault DB, secure/normal file storage, viewer-cache mitigation) | `SECURE_STORAGE_DESIGN.md` — architecture and every implementation-level detail (schema, key formats, nonce handling, DB lifecycle) fully resolved |
+| — | File Viewer (In-memory streaming viewer: Text/Code, Media/Image/Audio, Document/PDF/EPUB) | `FILE_VIEWER_DESIGN.md` — architecture, open-source stack (PyMuPDF, Chafa/Kitty, miniaudio/mpv, Rich), zero-disk-cache security pipeline |
 
 Phase 39 absorbs Phase 27 (Storage) — there's no plan to ship an
 unencrypted persisted-chat-history release before encryption catches up.
