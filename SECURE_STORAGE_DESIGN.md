@@ -1,8 +1,11 @@
 # Secure Storage — Design Document
 
 Status: **planning only — no code written yet.** All design decisions
-(§11) are now resolved. This document is the reference for implementation
-once Phase 39 starts (see IMPLEMENTATION_PLAN.md).
+(§11) and implementation-level specifics (§12–§17: database schema,
+vault keyfile format, passphrase/recovery-code requirements, nonce
+management, in-memory DB lifecycle) are now resolved. This document is
+the reference for implementation once Phase 39 starts (see
+IMPLEMENTATION_PLAN.md).
 
 ## 1. What this protects against (threat model)
 
@@ -431,3 +434,195 @@ open questions anymore.
    optionally satisfiable via an OS-level biometric prompt instead of
    typing, always delegated to the OS's own biometric API rather than
    this app handling raw biometric data itself.
+
+## 12. Database schema
+
+Phase 4's `trust.db` and Phase 27's planned `messages`/`transfers`/
+`settings` tables are consolidated into **one** encrypted database file
+(one whole-file-encryption lifecycle — §5 — rather than two separate
+ones running the same encrypt/decrypt/flush machinery in parallel).
+`trusted_devices` keeps the exact schema already implemented in Phase 4
+(`core/trust/store.py`) unchanged; this is additive, not a rewrite.
+
+```sql
+-- unchanged from Phase 4 (core/trust/store.py) — migrated into the
+-- unified vault, schema itself untouched
+CREATE TABLE trusted_devices (
+    device_id     TEXT PRIMARY KEY,
+    public_key    TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    first_seen    REAL NOT NULL,
+    last_seen     REAL NOT NULL,
+    status        TEXT NOT NULL,
+    revoked_by    TEXT,
+    revoked_at    REAL,
+    revoke_reason TEXT
+);
+
+CREATE TABLE messages (
+    message_id      TEXT PRIMARY KEY,
+    peer_device_id  TEXT NOT NULL,        -- FK-ish -> trusted_devices.device_id
+    direction       TEXT NOT NULL,        -- 'sent' | 'received'
+    text            TEXT NOT NULL,
+    timestamp       REAL NOT NULL,
+    status          TEXT NOT NULL         -- 'delivered' | 'failed' | 'pending'
+);
+
+CREATE TABLE transfers (
+    transfer_id     TEXT PRIMARY KEY,
+    peer_device_id  TEXT NOT NULL,
+    direction       TEXT NOT NULL,        -- 'sent' | 'received'
+    filename        TEXT NOT NULL,        -- original name, kept here even for
+                                           -- secure-mode files (the on-disk
+                                           -- filename is opaque per §6, but the
+                                           -- real name is safe to keep in this
+                                           -- already-whole-file-encrypted DB)
+    size            INTEGER NOT NULL,
+    checksum        TEXT NOT NULL,
+    storage_mode    TEXT NOT NULL,        -- 'secure' | 'normal'
+    storage_path    TEXT NOT NULL,        -- opaque id (secure/) or real path (normal/)
+    status          TEXT NOT NULL,        -- 'completed' | 'failed' | 'rejected'
+    timestamp       REAL NOT NULL
+);
+
+CREATE TABLE settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL                   -- JSON-encoded; auto-lock timeout,
+                                           -- don't-ask-again state, etc. (§4/§7)
+);
+```
+
+No sensitive column gets field-level encryption on top of this — the
+whole file is already ciphertext at rest (§5), so double-encrypting
+individual columns inside it would be redundant complexity for no real
+benefit, and was explicitly rejected as an option there.
+
+**Migration note:** since Phase 4 already shipped `trust.db` as a plain
+(unencrypted) file, implementing this phase includes a one-time migration
+step — read the existing plaintext `trust.db`, write its rows into the
+new unified encrypted vault, and retire the old plaintext file. Worth
+its own tested sub-step when this is actually implemented, not something
+to hand-wave as "just copy it over."
+
+## 13. Vault keyfile format
+
+`vault_keyfile.json` (§2) — not secret by itself, safe to back up
+alongside the encrypted database:
+
+```json
+{
+  "version": 1,
+  "kdf": "scrypt",
+  "kdf_params": {"n": 131072, "r": 8, "p": 1},
+  "passphrase_salt": "<base64, 16 random bytes>",
+  "wrapped_dek_passphrase": "<base64, AES-256-GCM ciphertext>",
+  "wrapped_dek_passphrase_nonce": "<base64, 12 random bytes>",
+  "recovery_salt": "<base64, 16 random bytes>",
+  "wrapped_dek_recovery": "<base64, AES-256-GCM ciphertext>",
+  "wrapped_dek_recovery_nonce": "<base64, 12 random bytes>",
+  "critical_key_salt": "<base64, null if not configured>",
+  "critical_key_verifier_salt": "<base64, null if not configured>",
+  "created_at": 1234567890.0
+}
+```
+
+- `kdf_params`: N=2^17 (131072), r=8, p=1 — standard interactive-use
+  Scrypt parameters (RFC 7914's own recommendation for this exact use
+  case), landing around a few hundred ms to ~1s derivation time on
+  typical hardware. Deliberately not user-configurable — a value chosen
+  wrong in either direction (too fast = weaker, too slow = the app hangs
+  on every unlock) is worse than a single sane default.
+- **No separate "passphrase verifier" hash field** — AES-GCM's own
+  authentication tag already does that job. A wrong passphrase derives a
+  wrong KEK, which fails to authenticate the ciphertext, which raises
+  immediately. Adding a second, separate verifier hash would be
+  redundant surface area (another thing to keep in sync, another thing
+  that could be implemented inconsistently) for no additional
+  information beyond what GCM already gives for free.
+- `critical_key_verifier_salt` mirrors the same "let the AEAD tag do the
+  verification" approach, if the critical-action key (§11.7) is
+  configured — `null` when it isn't, matching "unset by default" (§7).
+
+## 14. Passphrase requirements
+
+Minimum length only — **8 characters**, no forced complexity rules
+(uppercase/number/symbol requirements are specifically *not* required).
+This follows current NIST 800-63B guidance directly: forced complexity
+rules push people toward predictable patterns (`Passw0rd!`) more than
+they push toward real strength, while length is the dominant factor in
+actual resistance to brute-force. A live strength indicator (simple
+length/repetition heuristic — pure Python, no new dependency such as
+`zxcvbn`) is shown as a suggestion, not a hard gate — the only hard
+rejections are a passphrase under 8 characters, an empty passphrase, or
+one that exactly matches the device's own display name (an easy,
+worth-catching mistake, not a meaningful security control by itself).
+
+## 15. Recovery code format
+
+Random bytes, not a word list (rejected a BIP39-style word-list approach
+— would need bundling a ~2000-word list as a static asset for a benefit
+that doesn't really apply here: the recovery code is meant to be
+**written down once**, never memorized or spoken aloud, so words'
+usual memorability advantage over random characters doesn't actually
+matter for this use case).
+
+- **20 random bytes** (160 bits — well beyond what brute-forcing could
+  realistically threaten, even accounting for the KDF already slowing
+  guesses down) via `os.urandom(20)`.
+- Encoded in **Crockford Base32** (excludes visually-ambiguous
+  characters `I`, `L`, `O`, `U` — avoids transcription mistakes when
+  someone's copying it down by hand) and displayed grouped in blocks of
+  4-5 characters separated by dashes for readability, e.g.
+  `7QME-9KX2-...`.
+- A trailing **checksum character** (Crockford Base32 already defines
+  one) is appended so a mistyped recovery code is caught immediately
+  with a clear "this looks mistyped" message, rather than the app
+  discovering the mistake only after a failed unwrap.
+
+## 16. Nonce management for AES-GCM
+
+Every AES-256-GCM encryption operation (DEK wrapping, per-file
+encryption, vault database encryption) uses a **fresh random 96-bit
+(12-byte) nonce via `os.urandom(12)`**, generated at encryption time and
+stored alongside its ciphertext (nonces aren't secret — they only need
+to be unique per key, never reused). Never a manually incremented
+counter or any other scheme that could accidentally repeat — random
+generation for a 12-byte nonce has a large enough space that accidental
+collision under any single key is not a practical concern at the volume
+this app will ever produce. Per-file keys are already distinct (HKDF +
+random per-file salt, §5), so nonce reuse risk is doubly mitigated, but
+the nonce is generated fresh regardless — this isn't a place to rely on
+"probably fine because of the other layer."
+
+## 17. In-memory/tmpfs database lifecycle
+
+Concrete version of §5's "decrypt into `:memory:` or tmpfs" — **tmpfs
+preferred over SQLite's `:memory:` mode**, since it avoids needing the
+Online Backup API dance (temp on-disk connection → backed up into an
+in-memory connection) and just becomes a normal `sqlite3.connect(path)`
+against a RAM-backed path:
+
+- **Unlock**: read the encrypted vault file → decrypt with the DEK →
+  write the plaintext SQLite bytes to a RAM-backed path (`/dev/shm` on
+  Linux) → `sqlite3.connect()` against that path for the rest of the
+  session.
+- **Flush**: read the tmpfs file's current bytes → encrypt → write to a
+  temp file next to the real vault path → atomic rename over the real
+  vault path (never write the encrypted output in place — a crash
+  mid-write must never leave a half-written, corrupt vault file).
+  Happens periodically (every 30 seconds while unlocked) and
+  synchronously after specific writes considered too important to risk
+  losing (a new message, a completed transfer) — not just on a timer.
+- **Lock/exit**: flush once more, then delete the tmpfs file.
+- **Crash recovery**: worst case is losing whatever happened since the
+  last periodic/synchronous flush (bounded to a small window, same class
+  of guarantee most apps give with autosave) — never a corrupted vault,
+  because of the write-temp-then-atomic-rename pattern above.
+- **Portability gap, stated plainly rather than glossed over**: `/dev/shm`
+  is Linux-specific. Neither Windows nor macOS exposes an equivalent RAM
+  -backed path the same way out of the box. On those platforms this
+  needs a regular temp file with best-effort secure deletion instead —
+  the same "best-effort, not a guarantee" caveat already used for the
+  viewer-cache problem (§10) applies here identically, and should be
+  surfaced to the user the same honest way rather than implied to be
+  airtight.
