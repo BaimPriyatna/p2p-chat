@@ -1805,17 +1805,17 @@ Jangan mengikuti urutan struktur folder di atas secara mentah. Kerjakan
 seperti ini:
 
 ```
-1. Fix critical bugs                    ✅ sebagian besar sudah (lihat status di atas)
+1. Fix critical bugs                    ✅ selesai (lihat CHANGELOG v1.1.1's baseline)
         ↓
-2. Protocol V2                          ⏳ belum
+2. Protocol V2                          ✅ selesai (v1.1.1–v1.3.0)
         ↓
-3. Binary file transfer                 ⏳ belum
+3. Binary file transfer                 ✅ selesai (v1.3.0)
         ↓
-4. Device identity                      ⏳ belum (keputusan desain final)
+4. Device identity                      ✅ selesai (v1.3.1–v1.4.0)
         ↓
-5. Trust store                          ⏳ belum
+5. Trust store                          ✅ selesai (v1.4.1–v1.5.0)
         ↓
-6. Authenticated handshake              ⏳ belum
+6. Authenticated handshake              ⏳ belum ← kita di sini
         ↓
 7. Encrypted session                    ⏳ belum
         ↓
@@ -1829,11 +1829,14 @@ seperti ini:
         ↓
 12. Event architecture                  ⏳ belum
         ↓
-13. SQLite                              ⏳ belum
+13. SQLite                              🟡 diserap ke Phase 39 (desain lengkap,
+                                            belum ada kode — lihat SECURE_STORAGE_DESIGN.md)
         ↓
 14. UI security/trust UX                ⏳ belum
         ↓
-15. Automated tests                     🟡 sebagian (lihat Phase 29)
+15. Automated tests                     🟡 sebagian (lihat Phase 29) — CI sudah
+                                            jalan otomatis tiap push, lihat
+                                            .github/workflows/tests.yml
         ↓
 16. Performance testing                 ⏳ belum
         ↓
@@ -1842,17 +1845,26 @@ seperti ini:
 18. Release
 ```
 
+Status detail & versi persis per langkah: lihat `ROADMAP.md`.
+
 ## Prioritas versi
+
+**Catatan:** milestone di bawah ini adalah label aspirational dari
+rencana awal proyek — bukan nomor `pyproject.toml`/`CHANGELOG.md` yang
+sebenarnya (yang sudah eksplisit ikut SemVer sejak `1.1.1`, dan sudah
+lewat `v1.0` secara numerik di `1.5.0`, karena tiap fase selesai = bump
+MINOR). Anggap ini sebagai nama kelompok kerja, bukan urutan rilis.
+Status akurat + pemetaan ke versi asli ada di `ROADMAP.md`.
 
 Milestone:
 
 **v0.3 — Secure Foundation**
-- Protocol V2
-- binary frames
-- device identity
-- Ed25519
-- trust store
-- authenticated handshake
+- Protocol V2 ✅ (v1.1.1–v1.3.0)
+- binary frames ✅ (v1.3.0)
+- device identity ✅ (v1.3.1–v1.4.0)
+- Ed25519 ✅ (v1.3.1)
+- trust store ✅ (v1.4.1–v1.5.0)
+- authenticated handshake ⏳ belum (Phase 6)
 
 **v0.4 — Encrypted Transport**
 - X25519
@@ -1863,7 +1875,7 @@ Milestone:
 - timeouts
 
 **v0.5 — Reliable Transfer**
-- binary streaming
+- binary streaming ✅ (v1.3.0)
 - size enforcement ✅
 - safe filenames ✅
 - SHA-256 ✅
@@ -1878,10 +1890,11 @@ Milestone:
 - multi-subnet support
 
 **v0.7 — Persistence**
-- SQLite
-- message history
-- transfer history
-- trusted devices
+- SQLite ✅ (trust store, v1.4.1) — sisanya (message/transfer history)
+  digabung ke Phase 39, lihat SECURE_STORAGE_DESIGN.md §12
+- message history ⏳ (Phase 39, diserap dari sini)
+- transfer history ⏳ (Phase 39, diserap dari sini)
+- trusted devices ✅ (v1.4.1–v1.5.0)
 
 **v0.8 — Production Hardening**
 - rate limiting

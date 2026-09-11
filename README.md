@@ -1,5 +1,7 @@
 # p2p-chat
 
+![Tests](https://github.com/BaimPriyatna/p2p-chat/actions/workflows/tests.yml/badge.svg)
+
 A terminal-based peer-to-peer chat and file transfer application. No central
 server — peers discover each other directly over the local network (LAN or
 WiFi hotspot) and communicate directly.
@@ -31,7 +33,7 @@ WiFi hotspot) and communicate directly.
 ## Requirements
 
 - Python 3.10+
-- `textual`, `rich` (see `requirements.txt`)
+- `textual`, `rich`, `cryptography`, `keyring` (see `requirements.txt`)
 
 ## Installation
 
@@ -88,29 +90,42 @@ Sent messages show delivery status (`delivered ✓✓` or `failed ✗`).
   broadcast may not reach other clients in that case
 - No retry/resend for messages sent while a peer is offline (intentional —
   the peer's IP may have changed by the time it comes back online)
-- File chunks are base64-encoded inside JSON frames (~33% size overhead) —
-  fine for typical file sharing, not optimized for very large files
+- File chunks travel as binary frames (28-byte header + raw data, ~0.05%
+  overhead) rather than base64-in-JSON — see CHANGELOG.md v1.3.0
 - No pause/resume for interrupted file transfers — a failed transfer must
   be re-sent from the start
-- No end-to-end encryption — traffic is plain TCP on the local network
-- No automated test suite beyond the per-stage manual scripts
-  (`test_stage2.py`–`test_stage5.py`)
+- No end-to-end encryption yet — traffic is plain TCP on the local
+  network (planned: IMPLEMENTATION_PLAN.md Phase 6-9)
+- Automated test suite: `pytest tests/test_security_fixes.py
+  tests/test_upgrade_fixes.py --asyncio-mode=auto`, plus per-stage
+  smoke scripts (`tests/test_stage2.py`–`tests/test_stage5.py`, run
+  directly with `python3`). Runs automatically in CI on every push — see
+  `.github/workflows/tests.yml`.
 
 ## Project Structure
 
 ```
 p2p-chat/
-├── discovery.py       # UDP broadcast peer discovery
-├── protocol.py        # wire format / message types
-├── peer.py             # TCP connection management
-├── chat.py             # chat + delivery acknowledgment
-├── file_transfer.py    # staged file transfer
-├── ui.py               # Textual terminal UI (entry point)
-├── test_stage*.py      # per-stage verification scripts
+├── core/
+│   ├── protocol/        # wire format / message types / framing
+│   ├── identity/         # Ed25519 device identity
+│   └── trust/             # SQLite trust store, TOFU, revocation
+├── discovery.py        # UDP broadcast peer discovery
+├── protocol.py          # backward-compatible shim over core.protocol
+├── peer.py               # TCP connection management
+├── chat.py               # chat + delivery acknowledgment
+├── file_transfer.py      # staged file transfer
+├── ui.py                 # Textual terminal UI (entry point)
+├── tests/               # automated pytest suite + per-stage smoke scripts
+├── .github/workflows/   # CI
 ├── requirements.txt
 ├── README.md
+├── ROADMAP.md
 └── CHANGELOG.md
 ```
+
+See `ROADMAP.md` for current progress against `IMPLEMENTATION_PLAN.md`'s
+phases, and `CHANGELOG.md` for a detailed version history.
 
 ## License
 

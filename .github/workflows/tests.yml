@@ -1,0 +1,62 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package + dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-asyncio
+
+      - name: Run pytest suite (security + upgrade fixes)
+        run: pytest tests/test_security_fixes.py tests/test_upgrade_fixes.py --asyncio-mode=auto -v
+
+      - name: Run stage sanity scripts
+        run: |
+          python tests/test_stage2.py
+          python tests/test_stage3.py
+          python tests/test_stage4.py
+          python tests/test_stage5.py
+
+  secret-scan:
+    name: Guard against committed secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for GitHub PAT patterns
+        run: |
+          # Cheap defense-in-depth: fail the build if a GitHub personal
+          # access token pattern shows up anywhere being committed.
+          # Not a substitute for GitHub's own push-protection secret
+          # scanning, just an extra local check.
+          if git grep -InE "github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}" -- . ':(exclude).github/workflows/tests.yml'; then
+            echo "::error::Possible GitHub token found in tracked files. Revoke it and remove it from history before merging."
+            exit 1
+          fi
+          echo "No token patterns found."

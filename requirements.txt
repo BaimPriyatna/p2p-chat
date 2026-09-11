@@ -1,2 +1,4 @@
 textual>=8.0
 rich>=13.0
+cryptography>=42.0
+keyring>=24.0
