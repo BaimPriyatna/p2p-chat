@@ -94,22 +94,61 @@ DEK (§2). Losing both the passphrase and the recovery code means the
 data is unrecoverable by design; that's the same trade-off every
 client-side-encrypted system makes.
 
-## 4. Session model ("sudo-style")
+## 4. Session model — text chat vs. file actions
 
-Matches the mental model the person described:
+Refined after discussion: text chat and file actions have genuinely
+different risk profiles and should not share one friction level.
 
-- **App start → locked.** No secure data is readable.
-- **Unlock**: passphrase entered once → checked against the
-  passphrase-verifier hash → DEK unwrapped → kept in memory for the
-  session.
-- **Auto-lock after N minutes idle** (configurable), same idea as a sudo
-  timestamp expiring — re-enter the passphrase to unlock again.
-- **Step-up re-auth for sensitive actions**, even while already unlocked
-  — exporting/decrypting a file to plaintext, viewing/regenerating the
-  recovery code, changing the passphrase, or deleting secure data all
-  re-prompt for the passphrase, the same way `sudo` re-prompts for
-  specific commands. This is the "root password" analogy the person
-  drew, applied directly.
+- **Text chat: session-based, WhatsApp-like.** Once the app is unlocked
+  (passphrase entered, DEK in memory), reading and sending text messages
+  needs no further prompts. Text never leaves the app's own
+  in-memory-rendered UI — there's no external viewer, no exported copy,
+  no execution risk. Auto-lock after N minutes idle (configurable) still
+  applies at the app level, same idea as a sudo timestamp expiring.
+- **File actions: key required every time, by default.** Open, Export,
+  and file actions generally do **not** reuse the app's unlock state —
+  each one re-prompts for the passphrase independently, regardless of
+  whether the app session is already unlocked for chat. This is a
+  deliberate, stricter rule than a single shared session: a file action
+  can expose plaintext outside the app's controlled UI (an external
+  viewer, a permanent exported copy) in a way reading chat text never
+  does, so it doesn't inherit chat's lighter friction.
+  - **Import ("Move to Secure Storage") is the one exception** — a
+    yes/no confirmation is enough by default (bringing a file *into*
+    protection is much lower-risk than taking one *out* of it, or
+    exposing its plaintext). The passphrase can still be required here
+    too, if the user turns that on (see below).
+- **User-configurable security level** — the "always ask" default for
+  file actions is a default, not a hard floor forced on everyone.
+  Exposed as a setting so the friction/convenience trade-off is the
+  user's choice, not this design's:
+  - **"Don't ask again this session"** — a per-session toggle that skips
+    re-prompting for file actions once enabled, falling back to the
+    ordinary app-level unlock state (closer to how chat already works).
+  - **A separate "critical action" key** — an optional *second*,
+    distinct secret specifically for the highest-risk actions (Export
+    is the clear candidate: it's the one action that permanently removes
+    a file from protection). Lets someone run day-to-day Opens off their
+    main passphrase/session while still gating Export behind something
+    extra.
+  - Whatever the user configures, this is about **convenience vs.
+    friction, not about weakening what's encrypted** — the DEK is still
+    only ever unwrapped via a passphrase-derived KEK (§2); "don't ask
+    again this session" means not re-prompting, not skipping the
+    unwrap-with-key step entirely.
+
+## 4a. Text chat and file chat are separate UI areas
+
+Unlike a chat app that inlines file attachments into the text message
+timeline, text messages and files get **distinct views**, for both
+received and sent files — not interleaved. This follows directly from
+§4: since files carry a completely different authentication requirement
+(key every time) than text (session-based), mixing them into one
+timeline would mean the UI constantly interrupting a chat conversation
+with file-specific prompts, or — worse — under-authenticating a file
+because it's visually just another chat bubble. A dedicated file area
+makes "this needs a key, that doesn't" an obvious property of *where*
+something is, not something the user has to track per-item.
 
 ## 5. What gets encrypted
 
@@ -156,21 +195,40 @@ trade-offs:
 ## 6. File lifecycle, naming, and actions
 
 Four distinct, clearly separate actions on a secure file — worth naming
-precisely since they have very different security implications:
+precisely since they have very different security implications. Per §4,
+Open/Export/Delete re-prompt for the passphrase by default (user-
+configurable); Move to Secure Storage only needs a yes/no confirmation
+by default.
 
 - **Open** — decrypt to an ephemeral temp location, hand to the default
   external app, and best-effort clean up after. File **stays** in secure
-  storage; nothing permanent leaves it. See §7 for why this is still not
-  a full guarantee.
+  storage; nothing permanent leaves it. See §10 for why the cleanup is
+  still not a full guarantee.
+  - **Must never execute the file.** "Open" means view/preview only —
+    it must never result in the decrypted content running as a program.
+    Concretely: strip executable permission bits from the decrypted temp
+    file regardless of what it had before encryption; refuse to hand a
+    file with an executable/script extension (`.exe`, `.sh`, `.py`,
+    `.bat`, `.app`, etc. — needs a real list, not just these examples)
+    to the OS's default-handler mechanism at all, showing a clear "this
+    file type can't be opened, only exported" message instead of
+    guessing whether the OS would run it. Applies even if the original
+    file's *true* type doesn't match its extension — extension-sniffing
+    alone isn't a safe way to decide "is this executable," so this needs
+    a real design pass (magic-byte/content sniffing, not just filename)
+    before implementation, not something to hand-wave in this doc.
 - **Export** — decrypt and write a **permanent plaintext copy** outside
   secure storage, at a location the user picks. This is the one that
   actually removes protection from the data (see §8: export flow). Shown
   as a distinct, separately-confirmed action from Open — never implied
-  by it.
+  by it. The natural candidate for the optional "critical action" second
+  key (§4), since it's the one irreversible-in-effect action here.
 - **Move to Secure Storage** — the reverse: take an existing plaintext
   file (e.g. something already in normal/`Downloads/P2P-Chat/`) and
   encrypt it into secure storage. Import path for files that started out
-  unprotected.
+  unprotected. Default: yes/no confirmation only (lower risk — bringing
+  something *into* protection). Passphrase requirement here is available
+  as an opt-in, not the default.
 - **Delete** — remove a secure file (and its ciphertext) entirely.
 
 ### Naming/path scheme
@@ -206,7 +264,12 @@ Settings
 └── Security
     ├── Device Identity      (view fingerprint, Phase 3)
     ├── Trusted Devices       (Phase 4's TrustStore, list/revoke)
-    └── Recovery / Backup     (view backup status, regenerate recovery code — step-up re-auth required, §4)
+    ├── Recovery / Backup     (view backup status, regenerate recovery code — step-up re-auth required, §4)
+    └── Authentication         (§4's user-configurable friction level)
+        ├── Auto-lock timeout (idle minutes before the app re-locks)
+        ├── "Don't ask again this session" for file actions — on/off
+        └── Critical-action key — set/change a separate key for Export
+             (optional; unset by default, main passphrase covers everything)
 ```
 
 ## 8. Export / decrypt flow
@@ -273,9 +336,25 @@ Mitigation, in order of preference:
    first, or can this phase define the encrypted schema directly and
    effectively absorb Phase 27's scope?
 4. **Auto-lock timeout**: default idle duration before re-locking, and
-   whether it's user-configurable.
+   whether it's user-configurable. — *partially resolved*: confirmed
+   user-configurable (§4); default duration itself still open.
 5. ~~Per-file vs. global secure/normal default~~ — **resolved**:
    per-transfer choice, shown on the incoming-file accept dialog
    (Normal/Secure radio, defaulting to Secure — consistent with "chat is
    always secure," files default to the safer option with an easy
    opt-out per transfer rather than the other way around).
+6. **Executable/script detection for the "Open never executes" rule**
+   (§6): needs a real content-sniffing approach (magic bytes / MIME
+   detection), not just a file-extension blocklist — an extension alone
+   is trivially wrong (renamed executable) or trivially annoying (a
+   `.py` file that's actually just text someone's sharing). What
+   library/approach, and what happens when detection is inconclusive
+   (block by default, or warn-and-allow)?
+7. **Critical-action key mechanics**: does the optional second key for
+   Export (§4) get its own independent envelope-encryption setup (its
+   own KEK wrapping a *different* purpose-specific key), or does it
+   simply gate the UI step (still unwraps the same DEK, just requires a
+   second correct secret before the Export button does anything)? The
+   latter is simpler; the former is more genuinely "two keys with
+   independent compromise value" but adds real complexity for a feature
+   that's opt-in and off by default.

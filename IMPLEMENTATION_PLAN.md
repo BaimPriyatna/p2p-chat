@@ -1761,20 +1761,26 @@ DEK (AES-256, random, generated once)
   auto-unlock from keyring/OS-login alone (considered and explicitly
   rejected — doesn't cover "someone else picks up an already-unlocked
   device").
-- Session model is deliberately "sudo-style": unlock once, auto-lock
-  after an idle timeout, and re-prompt for the passphrase on sensitive
-  actions specifically (export/decrypt, view/regenerate recovery code,
-  change passphrase) even mid-session.
+- **Text chat vs. file actions have different friction, deliberately.**
+  Text chat is session-based (WhatsApp-like — unlock once, read/send
+  freely until idle timeout). File actions (Open/Export/Delete) default
+  to re-prompting for the passphrase **every time**, independent of the
+  chat session — user-configurable via "don't ask again this session"
+  and an optional separate "critical action" key for Export specifically.
+  Text and file messages get **separate UI areas**, not interleaved into
+  one timeline (unlike WhatsApp) — the differing auth requirement is a
+  property of *where* something is, not something to track per-item.
 - Recovery code generated once at first identity setup, shown once,
   never stored — only used once to derive a second wrapped copy of the
   DEK, so losing the passphrase doesn't mean losing the data.
 - Two storage modes: **secure** (encrypted; chat history is always this)
   and **normal** (plaintext; today's file-transfer behavior), chosen
   per-transfer on the incoming-file dialog (default: secure). Four
-  distinct actions on a secure file: **Open** (ephemeral, stays secure),
-  **Export** (permanent plaintext copy, explicit warned confirmation),
-  **Move to Secure Storage** (import), **Delete**. Secure files are
-  named by opaque id, not original filename.
+  distinct actions on a secure file: **Open** (ephemeral, stays secure,
+  **must never execute the file** — view/preview only), **Export**
+  (permanent plaintext copy, explicit warned confirmation), **Move to
+  Secure Storage** (import, yes/no confirmation by default), **Delete**.
+  Secure files are named by opaque id, not original filename.
 - Viewer-cache leak (decrypted content surviving in an external viewer's
   own cache/temp files) is a known gap — mitigated by rendering in-app
   wherever possible rather than handing files to an OS-level viewer.
