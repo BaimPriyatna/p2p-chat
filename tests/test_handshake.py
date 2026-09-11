@@ -189,6 +189,11 @@ async def test_successful_mutual_handshake():
             except OSError:
                 pass
 
+            # Yield to the event loop so the server callback has a chance
+            # to finish before we assert. Required on Python < 3.12 where
+            # the task scheduling order differs from 3.12.
+            await asyncio.sleep(0)
+
             server.close()
             await server.wait_closed()
 
