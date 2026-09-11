@@ -1763,24 +1763,28 @@ DEK (AES-256, random, generated once)
   device").
 - **Text chat vs. file actions have different friction, deliberately.**
   Text chat is session-based (WhatsApp-like — unlock once, read/send
-  freely until idle timeout). File actions (Open/Export/Delete) default
-  to re-prompting for the passphrase **every time**, independent of the
-  chat session — user-configurable via "don't ask again this session"
-  and an optional separate "critical action" key for Export specifically.
-  Text and file messages get **separate UI areas**, not interleaved into
-  one timeline (unlike WhatsApp) — the differing auth requirement is a
-  property of *where* something is, not something to track per-item.
+  freely until idle timeout). File actions (Open/Export/Move to Secure
+  Storage/Delete) default to re-prompting for the passphrase **every
+  time**, independent of the chat session. The one exception: **Incoming
+  Transfer** (receiving a file from a peer) only needs yes/no — nothing
+  is decrypted/exposed at that point. All of this is user-configurable
+  via "don't ask again this session" and an optional separate "critical
+  action" key for Export specifically. Text and file messages get
+  **separate UI areas**, not interleaved into one timeline (unlike
+  WhatsApp) — the differing auth requirement is a property of *where*
+  something is, not something to track per-item.
 - Recovery code generated once at first identity setup, shown once,
   never stored — only used once to derive a second wrapped copy of the
   DEK, so losing the passphrase doesn't mean losing the data.
 - Two storage modes: **secure** (encrypted; chat history is always this)
   and **normal** (plaintext; today's file-transfer behavior), chosen
-  per-transfer on the incoming-file dialog (default: secure). Four
-  distinct actions on a secure file: **Open** (ephemeral, stays secure,
-  **must never execute the file** — view/preview only), **Export**
-  (permanent plaintext copy, explicit warned confirmation), **Move to
-  Secure Storage** (import, yes/no confirmation by default), **Delete**.
-  Secure files are named by opaque id, not original filename.
+  per-transfer on the incoming-file dialog (default: secure). Five
+  distinct actions: **Incoming Transfer** (accept/reject, no key needed),
+  **Open** (ephemeral, stays secure, **must never execute the file** —
+  view/preview only), **Export** (permanent plaintext copy, explicit
+  warned confirmation), **Move to Secure Storage** (import an existing
+  local file, key required), **Delete**. Secure files are named by
+  opaque id, not original filename.
 - Viewer-cache leak (decrypted content surviving in an external viewer's
   own cache/temp files) is a known gap — mitigated by rendering in-app
   wherever possible rather than handing files to an OS-level viewer.

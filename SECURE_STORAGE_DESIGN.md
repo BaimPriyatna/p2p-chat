@@ -106,18 +106,20 @@ different risk profiles and should not share one friction level.
   no execution risk. Auto-lock after N minutes idle (configurable) still
   applies at the app level, same idea as a sudo timestamp expiring.
 - **File actions: key required every time, by default.** Open, Export,
-  and file actions generally do **not** reuse the app's unlock state —
-  each one re-prompts for the passphrase independently, regardless of
-  whether the app session is already unlocked for chat. This is a
-  deliberate, stricter rule than a single shared session: a file action
-  can expose plaintext outside the app's controlled UI (an external
-  viewer, a permanent exported copy) in a way reading chat text never
-  does, so it doesn't inherit chat's lighter friction.
-  - **Import ("Move to Secure Storage") is the one exception** — a
-    yes/no confirmation is enough by default (bringing a file *into*
-    protection is much lower-risk than taking one *out* of it, or
-    exposing its plaintext). The passphrase can still be required here
-    too, if the user turns that on (see below).
+  Move to Secure Storage, and Delete do **not** reuse the app's unlock
+  state — each one re-prompts for the passphrase independently,
+  regardless of whether the app session is already unlocked for chat.
+  This is a deliberate, stricter rule than a single shared session: a
+  file action can expose plaintext outside the app's controlled UI (an
+  external viewer, a permanent exported copy) in a way reading chat text
+  never does, so it doesn't inherit chat's lighter friction.
+  - **Incoming Transfer (receiving a file from a peer) is the one
+    exception** — a yes/no accept/reject is enough by default. This is a
+    different action from Move to Secure Storage: nothing is being
+    decrypted or exposed here, the file doesn't exist locally yet at
+    all, so there's nothing for a passphrase to protect at this step.
+    The passphrase can still be required for incoming transfers too, if
+    the user turns that on (see below).
 - **User-configurable security level** — the "always ask" default for
   file actions is a default, not a hard floor forced on everyone.
   Exposed as a setting so the friction/convenience trade-off is the
@@ -194,12 +196,22 @@ trade-offs:
 
 ## 6. File lifecycle, naming, and actions
 
-Four distinct, clearly separate actions on a secure file — worth naming
-precisely since they have very different security implications. Per §4,
-Open/Export/Delete re-prompt for the passphrase by default (user-
-configurable); Move to Secure Storage only needs a yes/no confirmation
-by default.
+Five distinct, clearly separate actions on a file — worth naming
+precisely since they have very different security implications and,
+correspondingly, different authentication requirements. Per §4,
+Open/Export/Delete/Move-to-Secure re-prompt for the passphrase by
+default (user-configurable); Incoming Transfer only needs a yes/no
+confirmation — it's the one action here that isn't about an existing
+secure file at all.
 
+- **Incoming Transfer** — receiving a file from another peer (the
+  accept/reject dialog, with the Normal/Secure choice already covered in
+  §5/§11). Yes/no confirmation only, **no passphrase** — nothing is
+  being decrypted or exposed yet at this point; accepting just starts
+  the transfer and, if Secure was chosen, writes it straight into secure
+  storage as it arrives. Not the same action as "Move to Secure
+  Storage" below, even though both end with a file in secure storage —
+  this one is about a file that doesn't exist locally yet at all.
 - **Open** — decrypt to an ephemeral temp location, hand to the default
   external app, and best-effort clean up after. File **stays** in secure
   storage; nothing permanent leaves it. See §10 for why the cleanup is
@@ -223,12 +235,13 @@ by default.
   as a distinct, separately-confirmed action from Open — never implied
   by it. The natural candidate for the optional "critical action" second
   key (§4), since it's the one irreversible-in-effect action here.
-- **Move to Secure Storage** — the reverse: take an existing plaintext
-  file (e.g. something already in normal/`Downloads/P2P-Chat/`) and
-  encrypt it into secure storage. Import path for files that started out
-  unprotected. Default: yes/no confirmation only (lower risk — bringing
-  something *into* protection). Passphrase requirement here is available
-  as an opt-in, not the default.
+- **Move to Secure Storage** — a different action from Incoming Transfer:
+  take an existing **local** plaintext file (e.g. something already in
+  normal/`Downloads/P2P-Chat/`, or anything else already on disk) and
+  encrypt it into secure storage. Requires the passphrase by default,
+  same as Open/Export/Delete — it's still a file-storage action touching
+  the DEK, unlike Incoming Transfer which doesn't decrypt/expose
+  anything.
 - **Delete** — remove a secure file (and its ciphertext) entirely.
 
 ### Naming/path scheme
