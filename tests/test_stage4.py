@@ -18,7 +18,7 @@ from peer import ConnectionManager
 PORT_A = 7201
 PORT_B = 7202
 
-DOWNLOADS_B = "/tmp/p2pchat_test_downloads_b"
+DOWNLOADS_B = "/tmp/peerc_test_downloads_b"
 
 progress_events: list[tuple[str, int, int]] = []
 complete_events: list[tuple[str, bool, str]] = []
@@ -46,7 +46,7 @@ async def main() -> None:
     def on_complete(transfer_id, success, filepath):
         complete_events.append((transfer_id, success, filepath))
 
-    ft_a = file_transfer.FileTransferSession(manager_a, downloads_dir="/tmp/p2pchat_test_downloads_a")
+    ft_a = file_transfer.FileTransferSession(manager_a, downloads_dir="/tmp/peerc_test_downloads_a")
     ft_b = file_transfer.FileTransferSession(
         manager_b, downloads_dir=DOWNLOADS_B,
         on_offer_received=accept_offer, on_progress=on_progress, on_complete=on_complete,
@@ -58,7 +58,7 @@ async def main() -> None:
     addr_key = await manager_a.connect_to("127.0.0.1", PORT_B)
     await asyncio.sleep(0.2)
 
-    test_file_path = "/tmp/p2pchat_test_source.bin"
+    test_file_path = "/tmp/peerc_test_source.bin"
     expected_checksum = make_test_file(test_file_path, size_bytes=300 * 1024)  # 300 KB, multiple chunks
 
     transfer_id = await ft_a.offer_file(addr_key, test_file_path)
@@ -86,13 +86,13 @@ async def main() -> None:
     reject_complete: list[tuple] = []
     ft_a.on_complete = lambda tid, ok, path: reject_complete.append((tid, ok, path))
 
-    test_file_path_2 = "/tmp/p2pchat_test_source2.bin"
+    test_file_path_2 = "/tmp/peerc_test_source2.bin"
     make_test_file(test_file_path_2, size_bytes=1024)
     transfer_id_2 = await ft_a.offer_file(addr_key, test_file_path_2)
     await asyncio.sleep(0.3)
 
     assert reject_complete == [(transfer_id_2, False, None)], f"expected reject notice, got {reject_complete}"
-    assert not os.path.exists(os.path.join(DOWNLOADS_B, "p2pchat_test_source2.bin"))
+    assert not os.path.exists(os.path.join(DOWNLOADS_B, "peerc_test_source2.bin"))
     print(f"Case 2 OK — offer rejected, sender notified, no file written on receiver side")
 
     await manager_a.close_all()

@@ -270,7 +270,7 @@ secure file at all.
   key (§4), since it's the one irreversible-in-effect action here.
 - **Move to Secure Storage** — a different action from Incoming Transfer:
   take an existing **local** plaintext file (e.g. something already in
-  normal/`Downloads/P2P-Chat/`, or anything else already on disk) and
+  normal/`Downloads/Peerc/`, or anything else already on disk) and
   encrypt it into secure storage. Requires the passphrase by default,
   same as Open/Export/Delete — it's still a file-storage action touching
   the DEK, unlike Incoming Transfer which doesn't decrypt/expose
@@ -283,9 +283,9 @@ Secure and normal storage should look structurally different on disk, not
 just be "the same folder but encrypted":
 
 ```
-~/.local/share/p2p-chat/secure/          ~/Downloads/P2P-Chat/
-├── 8f3a1c...◦.p2pfile                   ├── foto.jpg
-├── 72bc09...◦.p2pfile                   ├── video.mp4
+~/.local/share/peerc/secure/             ~/Downloads/Peerc/
+├── 8f3a1c...◦.peercfile                 ├── foto.jpg
+├── 72bc09...◦.peercfile                 ├── video.mp4
 └── ...                                  └── dokumen.pdf
 ```
 
@@ -304,8 +304,8 @@ eventually lands in — Phase 26/36/37):
 Settings
 │
 ├── Storage
-│   ├── Normal Storage  → path picker (default: ~/Downloads/P2P-Chat/)
-│   └── Secure Storage  → path picker (default: ~/.local/share/p2p-chat/secure/)
+│   ├── Normal Storage  → path picker (default: ~/Downloads/peerc/)
+│   └── Secure Storage  → path picker (default: ~/.local/share/peerc/secure/)
 │
 └── Security
     ├── Device Identity      (view fingerprint, Phase 3)

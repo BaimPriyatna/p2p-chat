@@ -1,7 +1,7 @@
 # Bug Report — peerc
 
 > Disesuaikan dari laporan audit sebelumnya (saat proyek masih bernama
-> `p2p-chat`). Perubahan di versi ini:
+> `peerc`). Perubahan di versi ini:
 > 1. Semua penyebutan proyek diganti ke **peerc**.
 > 2. Status bug yang sudah diperbaiki pada patch upgrade-prep ditandai ✅.
 > 3. Bagian device identity (BUG-003) diperjelas dengan hasil diskusi:

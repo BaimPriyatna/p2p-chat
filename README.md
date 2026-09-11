@@ -1,6 +1,6 @@
-# p2p-chat
+# peerc
 
-![Tests](https://github.com/BaimPriyatna/p2p-chat/actions/workflows/tests.yml/badge.svg)
+![Tests](https://github.com/BaimPriyatna/peerc/actions/workflows/tests.yml/badge.svg)
 
 A terminal-based peer-to-peer chat and file transfer application. No central
 server — peers discover each other directly over the local network (LAN or
@@ -39,21 +39,21 @@ WiFi hotspot) and communicate directly.
 
 ```bash
 git clone <repo-url>
-cd p2p-chat
+cd peerc
 pip install -e .
 ```
 
-This installs the package and creates the `pchat` command in your environment.
+This installs the package and creates the `peerc` command in your environment (with `pchat` as an alias).
 
 ## Usage
 
 Run directly via the console command:
 
 ```bash
-pchat
+peerc
 ```
 
-(Or alternately: `python3 ui.py`)
+(Or alternately: `pchat` or `python3 ui.py`)
 
 Run this on two or more devices on the same LAN or WiFi hotspot. Peers
 appear automatically in the left panel as they are discovered.
@@ -79,7 +79,7 @@ Type into the bottom input box and hit Enter:
 | `/copy [all\|last]` | Copy last chat message or entire log to clipboard |
 | `/clear` | Clear the chat log |
 | `/info` (or `/me`) | Display local identity, IP, gateway, and listening ports |
-| `/quit` (or `/exit`) | Quit `pchat` (or press `Ctrl+Q`) |
+| `/quit` (or `/exit`) | Quit `peerc` (or press `Ctrl+Q`) |
 
 Anything else typed is sent as a chat message to the active peer.
 Sent messages show delivery status (`delivered ✓✓` or `failed ✗`).
@@ -95,9 +95,9 @@ Sent messages show delivery status (`delivered ✓✓` or `failed ✗`).
 - No pause/resume for interrupted file transfers — a failed transfer must
   be re-sent from the start
 - No end-to-end encryption yet — traffic is plain TCP on the local
-  network (planned: IMPLEMENTATION_PLAN.md Phase 6-9)
+  network (planned: `docs/IMPLEMENTATION_PLAN.md` Phase 6-9)
 - Automated test suite: `pytest tests/test_security_fixes.py
-  tests/test_upgrade_fixes.py --asyncio-mode=auto`, plus per-stage
+  tests/test_upgrade_fixes.py tests/test_handshake.py --asyncio-mode=auto`, plus per-stage
   smoke scripts (`tests/test_stage2.py`–`tests/test_stage5.py`, run
   directly with `python3`). Runs automatically in CI on every push — see
   `.github/workflows/tests.yml`.
@@ -105,26 +105,33 @@ Sent messages show delivery status (`delivered ✓✓` or `failed ✗`).
 ## Project Structure
 
 ```
-p2p-chat/
+peerc/
 ├── core/
 │   ├── protocol/        # wire format / message types / framing
-│   ├── identity/         # Ed25519 device identity
-│   └── trust/             # SQLite trust store, TOFU, revocation
-├── discovery.py        # UDP broadcast peer discovery
+│   ├── identity/        # Ed25519 device identity
+│   ├── trust/           # SQLite trust store, TOFU, revocation
+│   └── crypto/          # X25519 key exchange & secure handshake
+├── docs/                # Project roadmap, design specs, and audit reports
+│   ├── ROADMAP.md
+│   ├── IMPLEMENTATION_PLAN.md
+│   ├── DESIGN.md
+│   ├── BUG_REPORT.md
+│   └── SECURE_STORAGE_DESIGN.md
+├── discovery.py         # UDP broadcast peer discovery
 ├── protocol.py          # backward-compatible shim over core.protocol
-├── peer.py               # TCP connection management
-├── chat.py               # chat + delivery acknowledgment
-├── file_transfer.py      # staged file transfer
-├── ui.py                 # Textual terminal UI (entry point)
+├── peer.py              # TCP connection management
+├── chat.py              # chat + delivery acknowledgment
+├── file_transfer.py     # staged file transfer
+├── ui.py                # Textual terminal UI (entry point)
 ├── tests/               # automated pytest suite + per-stage smoke scripts
 ├── .github/workflows/   # CI
 ├── requirements.txt
 ├── README.md
-├── ROADMAP.md
-└── CHANGELOG.md
+├── CHANGELOG.md
+└── LICENSE
 ```
 
-See `ROADMAP.md` for current progress against `IMPLEMENTATION_PLAN.md`'s
+See `docs/ROADMAP.md` for current progress against `docs/IMPLEMENTATION_PLAN.md`'s
 phases, and `CHANGELOG.md` for a detailed version history.
 
 ## License

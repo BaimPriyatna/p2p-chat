@@ -22,8 +22,8 @@ import os
 import keyring
 import keyring.errors
 
-SERVICE_NAME = "p2p-chat-device-identity"
-DEFAULT_PLAINTEXT_PATH = os.path.expanduser("~/.p2p-chat/device_key.pem")
+SERVICE_NAME = "peerc-device-identity"
+DEFAULT_PLAINTEXT_PATH = os.path.expanduser("~/.peerc/device_key.pem")
 
 
 class KeyStoreError(Exception):

@@ -25,7 +25,7 @@ from typing import Optional
 
 from .device import TrustedDevice, TrustStatus
 
-DEFAULT_DB_PATH = os.path.expanduser("~/.p2p-chat/trust.db")
+DEFAULT_DB_PATH = os.path.expanduser("~/.peerc/trust.db")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS trusted_devices (

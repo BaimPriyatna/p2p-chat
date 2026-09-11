@@ -8,6 +8,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - Nothing yet
 
+## [1.6.0] — Phase 6 complete: secure authenticated handshake
+
+### Added
+- **`core/crypto/key_exchange.py`** (Phase 6.1):
+  - Ephemeral X25519 keypair generation (`EphemeralKeypair`, `generate_ephemeral_keypair()`).
+  - Raw and hex public key serialization (`ephemeral_public_from_bytes()`, `ephemeral_public_from_hex()`).
+  - Diffie-Hellman shared secret computation (`compute_shared_secret()`), providing forward secrecy for sessions.
+- **`core/crypto/handshake.py`** (Phase 6.2):
+  - 3-way mutual authentication handshake state machine:
+    1. `handshake_init`: initiator sends `device_id`, `public_key` (Ed25519), `ephemeral_key` (X25519), `nonce`, and `sender_name`.
+    2. `handshake_response`: responder validates identity and trust, generates ephemeral key & nonce, signs the cumulative transcript, and returns signature.
+    3. `handshake_finish`: initiator validates responder signature and trust, signs cumulative transcript, and completes handshake.
+  - Transcript binding (`compute_responder_transcript`, `compute_initiator_transcript`, `compute_final_transcript_hash`): prevents man-in-the-middle parameter tampering or key substitution attacks.
+  - Integration with `core/trust/store.py`: evaluates `TrustStore.check()`, auto-rejects `REVOKED` devices and `KEY_CHANGED` devices, records first-seen peers as `PENDING`, and updates `last_seen`.
+  - Replay protection with `NonceCache` tracking fresh 32-byte nonces.
+  - Enforced `HANDSHAKE_TIMEOUT = 5.0s`.
+  - Asynchronous stream drivers `perform_handshake_initiator()` and `perform_handshake_responder()`.
+- **`core/protocol/messages.py`**:
+  - Message factories: `make_handshake_init()`, `make_handshake_response()`, `make_handshake_finish()`.
+  - Wire schema validation in `REQUIRED_FIELDS` and `validate_message()`.
+  - Re-exported via `core.protocol` and root `protocol.py`.
+- **`tests/test_handshake.py`**:
+  - Full automated coverage: ephemeral key exchange, message schemas, deterministic transcript hashing, loopback TCP handshake integration, and all mandatory security cases from Phase 30 (fake identity rejection, invalid signature rejection, MITM tampering rejection, replay detection, revoked device rejection, key change rejection, and handshake timeout).
+
+### Compatibility
+- Additive protocol extension. Re-exports through `protocol.py` preserve existing imports. Version bumped to `1.6.0` (MINOR: whole phase complete).
+
 ## [1.5.0] — Phase 4 complete: trust store + TOFU + revocation
 
 ### Added
@@ -49,7 +76,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   - `device.py` — `TrustedDevice` dataclass, `TrustStatus` enum
     (`PENDING` / `TRUSTED` / `REVOKED`).
   - `store.py` — `TrustStore`, backed by SQLite (stdlib `sqlite3`) at
-    `~/.p2p-chat/trust.db`, table `trusted_devices` matching the schema
+    `~/.peerc/trust.db`, table `trusted_devices` matching the schema
     in IMPLEMENTATION_PLAN.md. TOFU is deliberately split into a
     **read-only** `check(device_id, public_key)` (returns `UNKNOWN` /
     `PENDING` / `TRUSTED` / `KEY_CHANGED` / `REVOKED`) and separate
@@ -82,7 +109,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     left untouched and unused. There's nothing to migrate — a UUID has no
     keypair behind it. Any device upgrading to `1.4.0` gets a new,
     provable `device_id` (and a fresh default identity file at
-    `~/.p2p-chat/identity.json`) the first time it runs.
+    `~/.peerc/identity.json`) the first time it runs.
 
 ### Compatibility
 - **Breaking for existing deployments**: peers on `<1.4.0` and `1.4.0+`

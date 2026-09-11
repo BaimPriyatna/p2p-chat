@@ -23,7 +23,7 @@ from .device_identity import DeviceKeypair, generate_keypair, keypair_from_priva
 from .key_storage import KeyStore
 
 IDENTITY_SCHEMA_VERSION = 1
-DEFAULT_IDENTITY_DIR = os.path.expanduser("~/.p2p-chat")
+DEFAULT_IDENTITY_DIR = os.path.expanduser("~/.peerc")
 DEFAULT_IDENTITY_FILE = os.path.join(DEFAULT_IDENTITY_DIR, "identity.json")
 KEYRING_USERNAME = "device-identity"  # one identity per device, so this is a fixed key
 

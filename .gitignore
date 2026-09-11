@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+.peerc_identity.json
 .p2pchat_identity.json
 venv/
 .venv/

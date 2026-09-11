@@ -1,7 +1,7 @@
 # Implementation Plan — peerc
 
 > Disesuaikan dari rencana implementasi sebelumnya (saat proyek masih
-> bernama `p2p-chat`). Perubahan di versi ini: nama proyek → **peerc**, dan
+> bernama `peerc`). Perubahan di versi ini: nama proyek → **peerc**, dan
 > Phase 3 (Device Identity) ditambahkan ringkasan keputusan final soal
 > kenapa IP/MAC/hostname/hardware-serial ditolak sebagai basis identity
 > (detail lengkap ada di `BUG_REPORT.md` BUG-003).

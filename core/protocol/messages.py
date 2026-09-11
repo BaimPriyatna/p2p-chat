@@ -158,6 +158,55 @@ def make_hello_ack(peer_id: str, sender_name: str, tcp_port: int) -> dict:
     }
 
 
+def make_handshake_init(
+    device_id: str,
+    public_key: str,
+    ephemeral_key: str,
+    nonce: str,
+    sender_name: str,
+) -> dict:
+    return {
+        "type": "handshake_init",
+        "version": PROTOCOL_VERSION,
+        "device_id": device_id,
+        "public_key": public_key,
+        "ephemeral_key": ephemeral_key,
+        "nonce": nonce,
+        "sender_name": sender_name,
+        "timestamp": time.time(),
+    }
+
+
+def make_handshake_response(
+    device_id: str,
+    public_key: str,
+    ephemeral_key: str,
+    nonce: str,
+    sender_name: str,
+    signature: str,
+) -> dict:
+    return {
+        "type": "handshake_response",
+        "version": PROTOCOL_VERSION,
+        "device_id": device_id,
+        "public_key": public_key,
+        "ephemeral_key": ephemeral_key,
+        "nonce": nonce,
+        "sender_name": sender_name,
+        "signature": signature,
+        "timestamp": time.time(),
+    }
+
+
+def make_handshake_finish(signature: str) -> dict:
+    return {
+        "type": "handshake_finish",
+        "version": PROTOCOL_VERSION,
+        "signature": signature,
+        "timestamp": time.time(),
+    }
+
+
 # ---- Schema validation --------------------------------------------------
 #
 # read_frame() only guarantees "valid JSON". It does NOT guarantee the
@@ -176,6 +225,9 @@ REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "file_complete_ack": ("transfer_id", "success"),
     "hello": ("peer_id", "sender_name", "tcp_port"),
     "hello_ack": ("peer_id", "sender_name", "tcp_port"),
+    "handshake_init": ("device_id", "public_key", "ephemeral_key", "nonce", "sender_name"),
+    "handshake_response": ("device_id", "public_key", "ephemeral_key", "nonce", "sender_name", "signature"),
+    "handshake_finish": ("signature",),
     "error": ("code", "message"),
 }
 
@@ -242,5 +294,18 @@ def validate_message(message) -> dict:
         port = message["tcp_port"]
         if not isinstance(port, int) or not (0 < port < 65536):
             raise ProtocolError(f"{msg_type}.tcp_port out of range: {port!r}")
+
+    if msg_type in ("handshake_init", "handshake_response"):
+        for field_name in ("device_id", "public_key", "ephemeral_key", "nonce"):
+            val = message[field_name]
+            if not isinstance(val, str) or not val:
+                raise ProtocolError(f"{msg_type}.{field_name} must be a non-empty string")
+        if not isinstance(message["sender_name"], str):
+            raise ProtocolError(f"{msg_type}.sender_name must be a string")
+
+    if msg_type in ("handshake_response", "handshake_finish"):
+        sig = message["signature"]
+        if not isinstance(sig, str) or not sig:
+            raise ProtocolError(f"{msg_type}.signature must be a non-empty string")
 
     return message

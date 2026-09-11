@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "p2p-chat"
-version = "1.5.0"
+name = "peerc"
+version = "1.6.0"
 description = "Peer-to-peer terminal chat and file transfer application"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,8 +16,9 @@ dependencies = [
 ]
 
 [project.scripts]
+peerc = "ui:main"
 pchat = "ui:main"
 
 [tool.setuptools]
 py-modules = ["chat", "discovery", "file_transfer", "peer", "protocol", "ui"]
-packages = ["core", "core.protocol", "core.identity", "core.trust"]
+packages = ["core", "core.protocol", "core.identity", "core.trust", "core.crypto"]
