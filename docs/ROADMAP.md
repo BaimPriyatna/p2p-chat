@@ -35,10 +35,22 @@ Phase 12–20 (File Transfer V2 + Hardening) are complete.**
 | Phase | What | Where |
 |---|---|---|
 | 39 | Secure Storage (at-rest encryption: passphrase/recovery-code envelope encryption, encrypted vault DB, secure/normal file storage, viewer-cache mitigation) | `SECURE_STORAGE_DESIGN.md` — architecture and every implementation-level detail (schema, key formats, nonce handling, DB lifecycle) fully resolved |
+| 40 | Device Key Rotation (transition certificates: old key signs new key, so a peer's trust carries over automatically) | `SECURITY_MODEL.md` §13–16 |
+| 41 | Security Event Logging (INFO/WARNING/HIGH/CRITICAL classification, extends Phase 28) | `SECURITY_MODEL.md` §29 |
+| 42 | Group Authority System (admin-managed membership, policy enforced in core, multi-admin threshold signatures, audit log) | `GROUP_AUTHORITY_DESIGN.md` |
+| 43 | Group-Gated Export Authorization (admin capability AND personal critical-action key, not either/or) | `GROUP_AUTHORITY_DESIGN.md` §Export Authorization |
+| 44 | Internet P2P Connectivity (Identity/Locator separation, signed Endpoint Update) | `INTERNET_CONNECTIVITY_DESIGN.md` |
+| 45 | Rendezvous Service (optional, endpoint discovery only, never a data path) | `INTERNET_CONNECTIVITY_DESIGN.md` §Rendezvous |
+| 46 | NAT Traversal & Relay Fallback (optional, relay only sees ciphertext) | `INTERNET_CONNECTIVITY_DESIGN.md` §Optional Relay |
 | — | File Viewer (In-memory streaming viewer: Text/Code, Media/Image/Audio, Document/PDF/EPUB) | `FILE_VIEWER_DESIGN.md` — architecture, open-source stack (PyMuPDF, Chafa/Kitty, miniaudio/mpv, Rich), zero-disk-cache security pipeline |
 
 Phase 39 absorbs Phase 27 (Storage) — there's no plan to ship an
 unencrypted persisted-chat-history release before encryption catches up.
+
+Phases 40-46 are a later addition (Group Authority + Internet
+Connectivity + the Device Key Rotation and Security Event Logging they
+depend on) — not in the original phase numbering, appended after Phase
+39 rather than renumbering anything earlier.
 
 ## Next up (recommended order)
 
@@ -46,32 +58,36 @@ Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
 disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
-1. **Phase 5 — Discovery V2** ← next
-2. Phase 26/30 — Event architecture, security test cases
-3. **Phase 39 — Secure Storage** (design-complete, see above)
-4. Phase 36/37 — UI/security UX
-5. Phase 28-35 — logging, performance, concurrency, state machines,
-   error protocol
-6. Phase 38 — Project structure final (**not done now, deliberately** —
-   see note below)
-7. Security audit, release
+1. **Phase 40 — Device Key Rotation** ← next
+2. Phase 41 — Security Event Logging
+3. Phase 5 — Discovery V2
+4. Phase 26 — Event architecture
+5. **Phase 39 — Secure Storage** (design-complete, see above)
+6. **Phase 42 — Group Authority System** (design-complete)
+7. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)
+8. **Phase 44 — Internet P2P Connectivity** (design-complete)
+9. Phase 45/46 — Rendezvous, NAT Traversal & Relay (optional, design-complete)
+10. Phase 36/37 — UI/security UX
+11. Phase 28-35 — logging, performance, concurrency, state machines,
+    error protocol
+12. Phase 38 — Project structure final (**not done now, deliberately** —
+    see note below)
+13. Security audit, release
 
 ## Why Phase 38 (final project structure) isn't done yet
 
 `IMPLEMENTATION_PLAN.md`'s Phase 38 target structure (`app/`,
-`core/transport/`, `core/crypto/`, etc.) assumes modules that don't exist
-yet — e.g. `core/transport/secure.py` and `core/crypto/handshake.py`
-can't be meaningfully created before Phase 6-9 (handshake, session keys,
-encryption) actually exist to put in them. Restructuring into that target
-shape now would mean creating empty/placeholder directories for
-not-yet-designed code, which is more likely to need re-shuffling later
-than to help. What's already been done instead: `tests/` was split out
-now (matches the final structure, zero risk, all tests still pass from
-the new location), and CI (`.github/workflows/tests.yml`) now runs the
-full suite on every push. The `core/` modules that already exist
-(`protocol/`, `identity/`, `trust/`) already match their Phase 38
-destinations exactly — no rework needed there when the rest of Phase 38
-eventually happens.
+`core/transport/`, `core/crypto/`, etc.) is now much closer than it was
+— `core/transport/secure.py` and `core/crypto/handshake.py` both exist
+today (Phase 6-9 landed). What's still missing is the newer Phase 40-46
+scope: `core/identity/rotation.py`, `core/security/events.py`,
+`core/group/`, `core/connectivity/` don't exist yet, since those phases
+are still design-only. Restructuring into the final Phase 38 shape now
+would still mean creating placeholder directories for that not-yet-built
+code. What's already done matches Phase 38 exactly and needs no rework
+later: `core/{protocol,identity,trust,crypto,transport,transfer}` are
+all in their final destinations; `tests/` was split out; CI
+(`.github/workflows/tests.yml`) runs the full suite on every push.
 
 ## How this file stays honest
 

@@ -1799,6 +1799,152 @@ doc for implementation.
 
 ---
 
+## Phase 40 — Device Key Rotation
+
+**Depends on Phase 3/4** (identity + trust store). Full design:
+`SECURITY_MODEL.md` §13–16.
+
+```
+core/identity/
+└── rotation.py   # generate transition cert, verify transition cert
+```
+
+- `TrustedDevice` (Phase 4) gains an identity-chain concept: a
+  `device_id` can be linked to a prior `device_id` via a **Transition
+  Certificate** — the old private key signs a statement authorizing the
+  new public key as its successor.
+- On receiving a transition certificate for an already-`TRUSTED`
+  `device_id`, `TrustStore` verifies the signature against the *old*
+  (already-trusted) public key, and if valid, inserts the new
+  `device_id` as `TRUSTED` directly — no fresh TOFU `PENDING` step.
+- A **compromise-triggered** rotation gets none of this: there's no
+  transition cert from a key that can't be trusted anymore, so the new
+  identity goes through ordinary TOFU like any unknown device.
+- Un-provable rotation (claims to be a successor, signature doesn't
+  check out) is a `WARNING`-severity security event at minimum
+  (`SECURITY_MODEL.md` §29, Phase 41).
+
+**Status:** design complete, no code yet.
+
+## Phase 41 — Security Event Logging
+
+**Extends Phase 28** (Logging) with the severity classification and
+event types from `SECURITY_MODEL.md` §29.
+
+```
+core/security/
+└── events.py   # SecurityEvent dataclass, severity enum, emit()
+```
+
+- Severity: `INFO` / `WARNING` / `HIGH` / `CRITICAL` (`SECURITY_MODEL.md`
+  §29's exact classification).
+- Every module that already makes a security-relevant decision gets a
+  call site here, not a parallel logging system: `TrustStore.check()`
+  returning `KEY_CHANGED` or `REVOKED` (Phase 4), a handshake rejecting a
+  peer (Phase 6), an admin action (Phase 42) — each emits one
+  `SecurityEvent` at the point the decision is already made.
+- Optionally signable for audit purposes when part of a group
+  (`GROUP_AUTHORITY_DESIGN.md` §13) — signing is Phase 42's concern, this
+  phase only defines the event shape and severity.
+
+**Status:** design complete, no code yet.
+
+## Phase 42 — Group Authority System
+
+Full design: `GROUP_AUTHORITY_DESIGN.md`.
+
+```
+core/group/
+├── membership.py    # membership certificate issue/verify
+├── policy.py        # policy schema + enforcement (core-level, not UI)
+├── admin.py         # admin identity, multi-admin threshold signatures
+└── audit.py         # signed audit log (uses Phase 41's event shape)
+```
+
+- Admin identity reuses `core/identity/` (Phase 3) exactly — an admin is
+  just a device whose public key is additionally recorded as a group
+  admin, not a separate key type.
+- Membership certificate: signed `{device_id, public_key, group_id,
+  role, permissions, issued_at, expires_at}` (`GROUP_AUTHORITY_DESIGN.md`
+  §4).
+- Policy enforcement happens in `core/`, never only in `ui.py` — matches
+  the project's existing pattern (`core/protocol/messages.py`'s
+  `validate_message()`, `KeyStore`'s refusals) applied to group policy
+  checks specifically.
+- Multi-admin threshold (`k`-of-`n` signature verification) for
+  high-stakes actions, per `GROUP_AUTHORITY_DESIGN.md` §14.
+
+**Status:** design complete, no code yet.
+
+## Phase 43 — Group-Gated Export Authorization
+
+**Depends on Phase 39 (Secure Storage) and Phase 42 (Group Authority)**.
+Full design: `GROUP_AUTHORITY_DESIGN.md` §Export Authorization.
+
+- Resolves the integration question between the personal critical-action
+  key (`SECURE_STORAGE_DESIGN.md` §11.7) and group-managed Export
+  Authorization: **both are required (AND), not either/or**, when a
+  device is in a group with `allow_export` policy active.
+  - Group's signed, short-lived Export Authorization capability answers
+    "is this allowed at all, per policy" (an authorization check).
+  - The personal passphrase/critical-action key answers "prove
+    possession, unwrap the DEK" (a cryptographic check).
+  - Neither substitutes for the other. A personal (non-group) device is
+    unaffected — only the second gate ever applied to it, unchanged from
+    Phase 39's original design.
+- Export capability format, expiry, and nonce: `GROUP_AUTHORITY_DESIGN.md`
+  §12.
+
+**Status:** design complete, no code yet.
+
+## Phase 44 — Internet P2P Connectivity
+
+Full design: `INTERNET_CONNECTIVITY_DESIGN.md`.
+
+```
+core/connectivity/
+├── locator.py       # IP/port endpoint tracking, separate from identity
+└── endpoint_update.py  # signed endpoint announcement + verification
+```
+
+- Identity (`device_id`, Phase 3) stays completely separate from Locator
+  (IP/port) — a device can change IP without changing identity.
+- **Endpoint Update**: a signed announcement (reuses Phase 6's signing/
+  nonce-cache machinery) lets a peer safely update a known device's
+  locator without re-running TOFU.
+- Shares its underlying pattern with Phase 40's Transition Certificate —
+  both are "prove continuity via a signature the receiving peer can
+  verify," just for two different kinds of change (locator vs. identity
+  key). See `INTERNET_CONNECTIVITY_DESIGN.md`'s dedicated section on why
+  this matters more over the Internet than on a LAN.
+
+**Status:** design complete, no code yet.
+
+## Phase 45 — Rendezvous Service
+
+**Optional.** Full design: `INTERNET_CONNECTIVITY_DESIGN.md` §Rendezvous.
+
+- Not a data server — only helps peers find each other's current
+  locator. Chat/file traffic never routes through it.
+- Can be self-hosted, separate from Group Authority (Phase 42) — one
+  server doesn't have to do both jobs.
+
+**Status:** design complete, no code yet.
+
+## Phase 46 — NAT Traversal & Relay Fallback
+
+**Optional, depends on Phase 44.** Full design:
+`INTERNET_CONNECTIVITY_DESIGN.md` §Optional Relay.
+
+- Direct P2P attempted first; relay only as fallback when NAT/firewall
+  prevents a direct path.
+- Relay only ever sees already-encrypted (Phase 8) ciphertext — never
+  session plaintext.
+
+**Status:** design complete, no code yet.
+
+---
+
 ## Urutan implementasi yang disarankan
 
 Jangan mengikuti urutan struktur folder di atas secara mentah. Kerjakan
@@ -1815,34 +1961,50 @@ seperti ini:
         ↓
 5. Trust store                          ✅ selesai (v1.4.1–v1.5.0)
         ↓
-6. Authenticated handshake              ⏳ belum ← kita di sini
+6. Authenticated handshake              ✅ selesai (v1.6.0)
         ↓
-7. Encrypted session                    ⏳ belum
+7. Encrypted session (X25519+HKDF)      ✅ selesai (v1.7.0)
         ↓
-8. Secure connection manager            ⏳ belum
+8. Encryption (ChaCha20-Poly1305)       ✅ selesai (v1.8.0)
         ↓
-9. File transfer security               ⏳ belum
+9. Secure connection manager            ✅ selesai (v1.9.0 — Secure Transport Layer)
         ↓
-10. Resume                              ⏳ belum
+10. File transfer security + resume     ✅ selesai (v1.10.0 — File Transfer V2, Phase 12-20)
         ↓
-11. Discovery V2                        ⏳ belum
+11. Device Key Rotation                 ⏳ belum ← kita di sini (Phase 40)
         ↓
-12. Event architecture                  ⏳ belum
+12. Security Event Logging              ⏳ belum (Phase 41)
         ↓
-13. SQLite                              🟡 diserap ke Phase 39 (desain lengkap,
-                                            belum ada kode — lihat SECURE_STORAGE_DESIGN.md)
+13. Discovery V2                        ⏳ belum (Phase 5)
         ↓
-14. UI security/trust UX                ⏳ belum
+14. Event architecture                  ⏳ belum (Phase 26)
         ↓
-15. Automated tests                     🟡 sebagian (lihat Phase 29) — CI sudah
-                                            jalan otomatis tiap push, lihat
-                                            .github/workflows/tests.yml
+15. Secure Storage                      🟡 desain lengkap, belum ada kode
+                                            (Phase 39 — SECURE_STORAGE_DESIGN.md)
         ↓
-16. Performance testing                 ⏳ belum
+16. Group Authority System              🟡 desain lengkap, belum ada kode
+                                            (Phase 42 — GROUP_AUTHORITY_DESIGN.md)
         ↓
-17. Security audit                      ⏳ belum
+17. Group-Gated Export Authorization    🟡 desain lengkap, belum ada kode
+                                            (Phase 43, depends on Phase 39+42)
         ↓
-18. Release
+18. Internet P2P Connectivity           🟡 desain lengkap, belum ada kode
+                                            (Phase 44 — INTERNET_CONNECTIVITY_DESIGN.md)
+        ↓
+19. Rendezvous Service (optional)       🟡 desain lengkap, belum ada kode (Phase 45)
+        ↓
+20. NAT Traversal & Relay (optional)    🟡 desain lengkap, belum ada kode (Phase 46)
+        ↓
+21. UI security/trust UX                ⏳ belum (Phase 36/37)
+        ↓
+22. Automated tests                     🟡 sebagian — CI sudah jalan otomatis
+                                            tiap push, lihat .github/workflows/tests.yml
+        ↓
+23. Performance testing                 ⏳ belum
+        ↓
+24. Security audit                      ⏳ belum
+        ↓
+25. Release
 ```
 
 Status detail & versi persis per langkah: lihat `ROADMAP.md`.
