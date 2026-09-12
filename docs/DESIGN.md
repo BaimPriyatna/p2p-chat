@@ -1677,26 +1677,77 @@ Menampilkan percakapan chat dengan peer yang dipilih:
 
 ### Tab File
 
-Menampilkan semua file yang pernah dikirim/diterima dengan peer tersebut:
+Menampilkan semua file yang pernah dikirim/diterima dengan peer tersebut.
+File dikelompokkan jadi **ACTIVE** (transfer yang masih jalan) dan
+**HISTORY** (selesai/gagal/ditolak) — supaya "masih berlangsung" nggak
+kecampur sama "udah kelar" sekilas pandang. Tiap entri history juga
+nunjukin badge mode penyimpanan (🔒 Secure / 📁 Normal — lihat
+`SECURE_STORAGE_DESIGN.md` §5 soal kedua mode ini):
 
 ```
 ┌─ Chat [File] — Android ────────────────────────────────────────┐
 │                                                                │▲
-│ SHARED FILES WITH ANDROID                                      │ │
+│ ACTIVE                                                         │ │
+│ ↑ archive.zip          4.2 GB   ███████░ 63%  ETA 00:31        │ │
 │                                                                │ │
-│ ↓ photo.jpg           12.4 MB   ✓ Received   14:33            │ │
-│   ~/Downloads/photo.jpg                                        │ │
-│                                                                │█│
-│ ↑ archive.zip          4.2 GB   ███████░ 63%  14:30            │█│
-│   ETA 00:31 • 32 MB/s                                          │ │
-│                                                                │ │
-│ ↓ document.pdf         2.1 MB   ✓ Received   Yesterday        │ │
-│   ~/Downloads/document.pdf                                     │ │
+│ HISTORY                                                        │█│
+│ ↓ photo.jpg    🔒 Secure   12.4 MB   ✓ Received   14:33        │█│
+│ ↓ document.pdf 📁 Normal    2.1 MB   ✓ Received   Yesterday    │ │
 │                                                                │▼│
 ├────────────────────────────────────────────────────────────────┤
 │ /send <filepath>                               Ctrl+C → Chat  │
 └────────────────────────────────────────────────────────────────┘
 ```
+
+### Mengklik file item — wajib lewat auth gate (Secure Storage)
+
+**Klik item bukan langsung "open"** — itu keliru di draf sebelumnya.
+Setiap aksi file (`SECURE_STORAGE_DESIGN.md` §4/§6) beda gerbangnya:
+
+```
+Klik file 🔒 Secure  → tampilkan menu aksi dulu:
+                        [ Open ] [ Export ] [ Delete ]
+                        → pilih salah satu → AUTH GATE (di bawah) → aksi jalan
+
+Klik file 📁 Normal   → langsung buka lewat default app OS,
+                        tanpa auth gate (bukan secure storage,
+                        tidak ada yang perlu dibuka key-nya)
+
+Transfer yang masih ACTIVE → klik → tampilkan detail progress modal,
+                        bukan menu aksi file (belum ada file jadi
+                        untuk dibuka)
+```
+
+Auth gate untuk Open/Export/Delete (belum termasuk Move to Secure
+Storage, yang triggernya beda — dari sisi file *normal*, bukan dari tab
+File ini):
+
+```
+┌─ 🔐 Authentication required ───────────────────┐
+│                                                  │
+│  laporan.pdf                                    │
+│  Action: Export                                 │
+│                                                  │
+│  Enter passphrase:                              │
+│  [••••••••••••••••]                             │
+│                                                  │
+│  ☐ Don't ask again this session (files only)   │
+│                                                  │
+│              [ Cancel ]        [ Continue ]      │
+└──────────────────────────────────────────────────┘
+```
+
+- Kalau **Export** dan critical-action key udah di-set user (opsional,
+  `SECURE_STORAGE_DESIGN.md` §11.7): setelah passphrase di-submit, modal
+  ganti jadi minta critical-action key **secara berurutan** — bukan dua
+  field sekaligus, karena keduanya digabung (HKDF), bukan dua kunci
+  paralel.
+- Checkbox "Don't ask again this session" cuma nongol kalau user belum
+  nyalain itu; kalau session udah dalam mode "don't ask", modal ini
+  di-skip sepenuhnya untuk Open/Export/Delete berikutnya sampai app
+  di-lock lagi (§4).
+- Modal ini harus tetap muat & kepake di hard floor 80×24 (§40) — nggak
+  boleh didesain cuma buat layout comfortable.
 
 ### Mekanisme switching
 
@@ -1723,7 +1774,9 @@ Mouse:
 ```
 Klik "[Chat]" di border_title  → switch ke tab Chat
 Klik "[File]" di border_title  → switch ke tab File
-Klik file item di tab File     → open file / show detail
+Klik file 🔒 Secure             → menu aksi [Open][Export][Delete] → auth gate
+Klik file 📁 Normal             → buka langsung (no auth gate)
+Klik transfer yang masih ACTIVE → detail progress modal
 ```
 
 ### Compose structure
@@ -1744,25 +1797,38 @@ def compose(self) -> ComposeResult:
 
 ### Per-peer state
 
-Setiap peer menyimpan:
+**Sumber data bukan cuma in-memory** — `shared_files` di-load dari tabel
+`transfers` di vault terenkripsi (`SECURE_STORAGE_DESIGN.md` §12), bukan
+state Python yang ilang tiap app ditutup. Struktur di bawah ini adalah
+representasi in-memory buat rendering saat ini (sebuah cache/view, bukan
+sumber kebenaran):
 
 ```python
 @dataclass
 class PeerContentState:
     peer_id: str
-    chat_messages: list[dict]     # history chat dengan peer ini
-    shared_files: list[dict]      # file yang dikirim/diterima
-    active_tab: str = "chat"      # tab terakhir yang dibuka
+    chat_messages: list[dict]     # dari tabel `messages` (§12), di-load per-peer
+    shared_files: list[dict]      # dari tabel `transfers` (§12), di-load per-peer
+    active_tab: str = "chat"      # tab terakhir yang dibuka (bisa disimpan
+                                   # di tabel `settings`, §12, biar persist
+                                   # antar-restart juga — bukan cuma per sesi)
 ```
 
-Saat switch peer di sidebar:
+Alur load saat switch peer:
 
 ```
 1. Simpan scroll position tab saat ini
-2. Load chat_messages dan shared_files peer baru
-3. Restore tab yang terakhir aktif untuk peer tersebut
-4. Restore scroll position
+2. Query tabel `messages` WHERE peer_device_id = peer_baru → chat_messages
+3. Query tabel `transfers` WHERE peer_device_id = peer_baru → shared_files
+   (memisahkan status: yang belum selesai jadi ACTIVE, sisanya HISTORY)
+4. Restore tab yang terakhir aktif untuk peer tersebut
+5. Restore scroll position
 ```
+
+Konsekuensinya: vault harus dalam keadaan **unlocked** (§4 Secure
+Storage) untuk tab Chat maupun tab File bisa nge-render apapun — kalau
+locked, seluruh area konten (bukan cuma file) nunjukin state locked,
+bukan cuma kosong.
 
 ### Perbedaan input box berdasarkan tab
 
