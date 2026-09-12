@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.12.0] — Phase 41 complete: Security Event Logging
+
 ### Added
 - **Phase 41 — Security Event Logging** (`core/security/events.py`,
   `core/trust/store.py`, `core/crypto/handshake.py`, `core/identity/rotation.py`,
@@ -40,6 +42,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   - **`tests/test_security_events.py`** [NEW]: 10 comprehensive tests covering severity ordering,
     serialization, safe credential redaction, listeners, TrustStore, key rotation, and handshake
     call sites.
+
+## [1.11.0] — Phase 40 complete: Device Key Rotation
+
+### Added
 - **Phase 40 — Device Key Rotation** (`core/identity/rotation.py`,
   `core/identity/identity_file.py`, `core/trust/store.py`):
   - **`core/identity/rotation.py`** [NEW]: `TransitionCertificate` dataclass and
