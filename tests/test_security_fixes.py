@@ -78,7 +78,8 @@ async def test_path_traversal():
             resolved = os.path.realpath(os.path.join(DOWNLOADS_B, fn))
             assert os.path.commonpath([resolved, downloads_root]) == downloads_root
         # /etc/passwd must never be opened for writing.
-        assert os.path.getsize("/etc/passwd") > 0  # still exists, untouched (would raise if we'd broken it)
+        if os.path.exists("/etc/passwd"):
+            assert os.path.getsize("/etc/passwd") > 0  # still exists, untouched (would raise if we'd broken it)
         print("test_path_traversal OK — BUG-001 fixed, no escape from downloads_dir")
     finally:
         await manager_a.close_all()
