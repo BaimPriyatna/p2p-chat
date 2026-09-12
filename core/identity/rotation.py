@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from core.security import SecurityEvent, SecurityEventType, SecuritySeverity, emit
 from .device_identity import DeviceKeypair, public_key_from_bytes
 
 # Domain-separation prefix — ensures rotation signatures cannot be
@@ -114,7 +115,15 @@ def verify_transition_certificate(cert: TransitionCertificate) -> bool:
         )
         old_pub_key.verify(sig_bytes, payload)
         return True
-    except (InvalidSignature, Exception):
+    except (InvalidSignature, Exception) as e:
+        emit(
+            SecurityEvent(
+                event_type=SecurityEventType.INVALID_ROTATION,
+                severity=SecuritySeverity.WARNING,
+                description=f"transition certificate verification failed for {getattr(cert, 'old_device_id', 'unknown')} -> {getattr(cert, 'new_device_id', 'unknown')}: {e}",
+                device_id=getattr(cert, "old_device_id", None),
+            )
+        )
         return False
 
 

@@ -19,6 +19,7 @@ import os
 import time
 from dataclasses import dataclass
 
+from core.security import SecurityEvent, SecurityEventType, SecuritySeverity, emit
 from .device_identity import DeviceKeypair, generate_keypair, keypair_from_private_pem
 from .key_storage import KeyStore
 
@@ -174,6 +175,15 @@ def rotate_identity(
         name=name,
         created_at=created_at,
         storage_backend=backend_used,
+    )
+    emit(
+        SecurityEvent(
+            event_type=SecurityEventType.KEY_ROTATION,
+            severity=SecuritySeverity.INFO,
+            description=f"local device identity rotated from {current.keypair.device_id} to {new_keypair.device_id}",
+            device_id=new_keypair.device_id,
+            details={"old_device_id": current.keypair.device_id, "new_device_id": new_keypair.device_id},
+        )
     )
     return new_identity, cert
 

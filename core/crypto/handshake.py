@@ -42,6 +42,7 @@ from core.protocol.messages import (
     make_handshake_response,
     validate_message,
 )
+from core.security import SecurityEvent, SecurityEventType, SecuritySeverity, emit
 from core.trust.store import TrustDecision, TrustStore
 from .key_exchange import (
     EphemeralKeypair,
@@ -178,6 +179,14 @@ def _verify_device_identity(device_id: str, public_key_hex: str) -> bytes:
 
     expected_id = compute_device_id(pub_bytes)
     if expected_id != device_id:
+        emit(
+            SecurityEvent(
+                event_type=SecurityEventType.AUTH_FAILED,
+                severity=SecuritySeverity.WARNING,
+                description=f"device_id mismatch: claimed {device_id!r}, computed {expected_id!r} from public key",
+                device_id=device_id,
+            )
+        )
         raise IdentityVerificationError(
             f"device_id mismatch: claimed {device_id!r}, computed {expected_id!r} from public key"
         )
@@ -256,6 +265,14 @@ async def perform_handshake_initiator(
     # 4. Replay check on responder nonce
     resp_nonce = resp_msg["nonce"]
     if not cache.check_and_add(resp_nonce):
+        emit(
+            SecurityEvent(
+                event_type=SecurityEventType.REPLAY_DETECTED,
+                severity=SecuritySeverity.HIGH,
+                description="replayed responder nonce detected in handshake",
+                device_id=resp_msg.get("device_id"),
+            )
+        )
         raise HandshakeProtocolError("replayed responder nonce detected")
 
     # 5. Verify responder device_id ties to its public key
@@ -276,6 +293,14 @@ async def perform_handshake_initiator(
         sig_bytes = bytes.fromhex(resp_msg["signature"])
         responder_pub.verify(sig_bytes, resp_transcript)
     except (ValueError, InvalidSignature) as e:
+        emit(
+            SecurityEvent(
+                event_type=SecurityEventType.AUTH_FAILED,
+                severity=SecuritySeverity.WARNING,
+                description=f"invalid responder signature in handshake: {e}",
+                device_id=resp_msg.get("device_id"),
+            )
+        )
         raise SignatureVerificationError(f"invalid responder signature: {e}") from e
 
     # 8. Compute initiator signature over cumulative transcript
@@ -337,6 +362,14 @@ async def perform_handshake_responder(
     # 2. Replay check on initiator nonce
     init_nonce = init_msg["nonce"]
     if not cache.check_and_add(init_nonce):
+        emit(
+            SecurityEvent(
+                event_type=SecurityEventType.REPLAY_DETECTED,
+                severity=SecuritySeverity.HIGH,
+                description="replayed initiator nonce detected in handshake",
+                device_id=init_msg.get("device_id"),
+            )
+        )
         raise HandshakeProtocolError("replayed initiator nonce detected")
 
     # 3. Verify initiator device_id ties to its public key
@@ -403,6 +436,14 @@ async def perform_handshake_responder(
         sig_bytes = bytes.fromhex(finish_msg["signature"])
         initiator_pub.verify(sig_bytes, init_transcript)
     except (ValueError, InvalidSignature) as e:
+        emit(
+            SecurityEvent(
+                event_type=SecurityEventType.AUTH_FAILED,
+                severity=SecuritySeverity.WARNING,
+                description=f"invalid initiator signature in handshake: {e}",
+                device_id=init_msg.get("device_id"),
+            )
+        )
         raise SignatureVerificationError(f"invalid initiator signature: {e}") from e
 
     # 10. Compute Diffie-Hellman shared secret

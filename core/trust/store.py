@@ -28,6 +28,7 @@ import sqlite3
 import time
 from typing import TYPE_CHECKING, Optional
 
+from core.security import SecurityEvent, SecurityEventType, SecuritySeverity, emit
 from .device import TrustedDevice, TrustStatus
 
 if TYPE_CHECKING:
@@ -96,8 +97,24 @@ class TrustStore:
         if device is None:
             return TrustDecision.UNKNOWN
         if device.public_key != public_key:
+            emit(
+                SecurityEvent(
+                    event_type=SecurityEventType.IDENTITY_CHANGED,
+                    severity=SecuritySeverity.WARNING,
+                    description=f"device {device_id} public key does not match stored key (possible impersonation)",
+                    device_id=device_id,
+                )
+            )
             return TrustDecision.KEY_CHANGED
         if device.status == TrustStatus.REVOKED:
+            emit(
+                SecurityEvent(
+                    event_type=SecurityEventType.REVOKED_DEVICE_ATTEMPT,
+                    severity=SecuritySeverity.HIGH,
+                    description=f"revoked device {device_id} evaluated in trust store",
+                    device_id=device_id,
+                )
+            )
             return TrustDecision.REVOKED
         if device.status == TrustStatus.TRUSTED:
             return TrustDecision.TRUSTED
@@ -199,6 +216,15 @@ class TrustStore:
         from core.identity.rotation import RotationError, verify_transition_certificate
 
         if not verify_transition_certificate(cert):
+            emit(
+                SecurityEvent(
+                    event_type=SecurityEventType.INVALID_ROTATION,
+                    severity=SecuritySeverity.WARNING,
+                    description=f"TransitionCertificate signature is invalid for rotation {cert.old_device_id} -> {cert.new_device_id}",
+                    device_id=cert.old_device_id,
+                    details={"old_device_id": cert.old_device_id, "new_device_id": cert.new_device_id},
+                )
+            )
             raise RotationError(
                 f"TransitionCertificate signature is invalid for rotation "
                 f"{cert.old_device_id!r} → {cert.new_device_id!r}"
@@ -206,6 +232,15 @@ class TrustStore:
 
         old_device = self.get(cert.old_device_id)
         if old_device is not None and old_device.status == TrustStatus.REVOKED:
+            emit(
+                SecurityEvent(
+                    event_type=SecurityEventType.REVOKED_DEVICE_ATTEMPT,
+                    severity=SecuritySeverity.HIGH,
+                    description=f"revoked device {cert.old_device_id} attempted key rotation to {cert.new_device_id}",
+                    device_id=cert.old_device_id,
+                    details={"old_device_id": cert.old_device_id, "new_device_id": cert.new_device_id},
+                )
+            )
             raise RotationError(
                 f"old device_id {cert.old_device_id!r} is REVOKED — "
                 "a revoked device cannot authorise a key rotation"
@@ -258,6 +293,15 @@ class TrustStore:
                 )
 
         self._conn.commit()
+        emit(
+            SecurityEvent(
+                event_type=SecurityEventType.KEY_ROTATION,
+                severity=SecuritySeverity.INFO,
+                description=f"recorded valid key rotation from {cert.old_device_id} to {cert.new_device_id}",
+                device_id=cert.new_device_id,
+                details={"old_device_id": cert.old_device_id, "new_device_id": cert.new_device_id},
+            )
+        )
 
     def get_rotation_chain(self, device_id: str) -> list[str]:
         """Return all device_ids that belong to the same rotation chain as *device_id*.
@@ -334,6 +378,16 @@ class TrustStore:
             if node is None:
                 continue
             if node.status == TrustStatus.REVOKED:
+                if direct != TrustDecision.REVOKED:
+                    emit(
+                        SecurityEvent(
+                            event_type=SecurityEventType.REVOKED_DEVICE_ATTEMPT,
+                            severity=SecuritySeverity.HIGH,
+                            description=f"device {device_id} is tainted by revoked ancestor {chain_id} in rotation chain",
+                            device_id=device_id,
+                            details={"tainted_by": chain_id},
+                        )
+                    )
                 return TrustDecision.REVOKED
             if node.status == TrustStatus.TRUSTED:
                 chain_has_trusted = True

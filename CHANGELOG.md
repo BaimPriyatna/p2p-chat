@@ -6,6 +6,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Phase 41 — Security Event Logging** (`core/security/events.py`,
+  `core/trust/store.py`, `core/crypto/handshake.py`, `core/identity/rotation.py`,
+  `core/identity/identity_file.py`):
+  - **`core/security/events.py`** [NEW]: Extends Phase 28 logging with the
+    `SECURITY_MODEL.md` §29 severity classification scheme:
+    - `SecuritySeverity` (`INFO`, `WARNING`, `HIGH`, `CRITICAL`) with rank ordering
+      and standard library `logging` level mapping (`INFO` -> 20, `WARNING` -> 30,
+      `HIGH` -> 40/ERROR, `CRITICAL` -> 50/CRITICAL).
+    - `SecurityEventType` defining standardized events: endpoint changes, normal key rotation,
+      unknown devices, identity changes, authentication failures, invalid rotation certificates,
+      revoked device attempts, nonce replays, and key compromises.
+    - `SecurityEvent` dataclass with automatic defensive sanitization preventing leaks of
+      private keys, session keys, or secrets into logs or event payloads.
+    - `canonical_payload()` producing deterministic byte representations under domain separation
+      prefix `peerc-security-event\x00` for Phase 42 group audit trail signing.
+    - `emit(event)` dispatcher that routes to `peerc.security` logger and in-memory listeners.
+    - Listener registry (`add_listener`, `remove_listener`) and `capture_security_events()`
+      context manager.
+  - **Call site integrations**:
+    - `TrustStore.check()` emits `IDENTITY_CHANGED` (WARNING) on key mismatch and
+      `REVOKED_DEVICE_ATTEMPT` (HIGH) on revoked devices.
+    - `TrustStore.record_rotation()` emits `KEY_ROTATION` (INFO) on valid rotation,
+      `INVALID_ROTATION` (WARNING) on invalid certificate, and `REVOKED_DEVICE_ATTEMPT` (HIGH)
+      when a revoked device attempts rotation.
+    - `TrustStore.check_with_rotation()` emits `REVOKED_DEVICE_ATTEMPT` (HIGH) when a device
+      is tainted by a revoked ancestor in its rotation chain.
+    - `verify_transition_certificate()` in `core/identity/rotation.py` emits `INVALID_ROTATION`
+      (WARNING) on bad signature or malformed certificate.
+    - `rotate_identity()` in `core/identity/identity_file.py` emits `KEY_ROTATION` (INFO).
+    - `handshake.py` emits `AUTH_FAILED` (WARNING) on claimed device_id mismatch or signature
+      failure, and `REPLAY_DETECTED` (HIGH) on nonce replay.
+  - **`tests/test_security_events.py`** [NEW]: 10 comprehensive tests covering severity ordering,
+    serialization, safe credential redaction, listeners, TrustStore, key rotation, and handshake
+    call sites.
 - **Phase 40 — Device Key Rotation** (`core/identity/rotation.py`,
   `core/identity/identity_file.py`, `core/trust/store.py`):
   - **`core/identity/rotation.py`** [NEW]: `TransitionCertificate` dataclass and

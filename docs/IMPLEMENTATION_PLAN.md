@@ -1847,7 +1847,7 @@ core/security/
   (`GROUP_AUTHORITY_DESIGN.md` §13) — signing is Phase 42's concern, this
   phase only defines the event shape and severity.
 
-**Status:** design complete, no code yet.
+**Status:** selesai (`core/security/events.py`, integration call sites, and `tests/test_security_events.py`).
 
 ## Phase 42 — Group Authority System
 
@@ -1971,11 +1971,11 @@ seperti ini:
         ↓
 10. File transfer security + resume     ✅ selesai (v1.10.0 — File Transfer V2, Phase 12-20)
         ↓
-11. Device Key Rotation                 ⏳ belum ← kita di sini (Phase 40)
+11. Device Key Rotation                 ✅ selesai (Phase 40)
         ↓
-12. Security Event Logging              ⏳ belum (Phase 41)
+12. Security Event Logging              ✅ selesai (Phase 41)
         ↓
-13. Discovery V2                        ⏳ belum (Phase 5)
+13. Discovery V2                        ⏳ belum ← kita di sini (Phase 5)
         ↓
 14. Event architecture                  ⏳ belum (Phase 26)
         ↓
