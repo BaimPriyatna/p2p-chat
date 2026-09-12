@@ -24,7 +24,10 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Optional, Set
+from typing import TYPE_CHECKING, Optional, Set
+
+if TYPE_CHECKING:
+    from .kdf import SessionKeys
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey

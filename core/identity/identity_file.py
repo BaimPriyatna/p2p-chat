@@ -18,6 +18,10 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .rotation import TransitionCertificate
 
 from core.security import SecurityEvent, SecurityEventType, SecuritySeverity, emit
 from .device_identity import DeviceKeypair, generate_keypair, keypair_from_private_pem
