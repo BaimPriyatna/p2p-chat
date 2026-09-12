@@ -30,8 +30,8 @@ jobs:
           pip install -e .
           pip install pytest pytest-asyncio
 
-      - name: Run pytest suite (security + upgrade fixes + handshake + kdf + encryption)
-        run: pytest tests/test_security_fixes.py tests/test_upgrade_fixes.py tests/test_handshake.py tests/test_kdf.py tests/test_encryption.py --asyncio-mode=auto -v
+      - name: Run pytest suite (security + upgrade fixes + handshake + kdf + encryption + transport)
+        run: pytest tests/test_security_fixes.py tests/test_upgrade_fixes.py tests/test_handshake.py tests/test_kdf.py tests/test_encryption.py tests/test_transport.py --asyncio-mode=auto -v
 
       - name: Run stage sanity scripts
         run: |

@@ -8,6 +8,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - Nothing yet
 
+## [1.9.0] — Phase 9 complete: Secure Transport Layer
+
+### Added
+- **`core/transport/`** (Phase 9) — Decoupled secure transport architecture (`Application -> SecureSession -> EncryptedTransport -> TCP`):
+  - **`timeout.py`**: Centralized transport timeouts (`CONNECT_TIMEOUT = 5.0s`, `HANDSHAKE_TIMEOUT = 5.0s`, `IDLE_TIMEOUT = 60.0s`) and custom exception hierarchy (`TransportTimeoutError`, `ConnectTimeoutError`, `HandshakeTimeoutError`, `IdleTimeoutError`, `ConnectionClosedError`).
+  - **`tcp.py`**: `TCPConnection` encapsulating `(reader, writer)` with length-prefixed JSON and binary framing, peer address inspection, and `open_tcp_connection(host, port, timeout)`.
+  - **`secure.py`**: `EncryptedTransport` wrapping `TCPConnection` and `SecureChannel` (Phase 8 ChaCha20-Poly1305). All framed traffic travels as uniform binary frames (`[8 bytes sequence][ciphertext + 16B Poly1305 tag]`).
+  - **`session.py`**: High-level `SecureSession` providing `send(message)`, `send_binary(payload)`, and `receive()` — application code needs zero awareness of cryptography. Automated session establishment helpers `initiate_secure_session()` and `accept_secure_session()` executing the Phase 6 mutual Ed25519 handshake and Phase 7 session key derivation.
+  - **`SecureSessionManager`**: Multi-session registry keyed by authenticated `device_id` (not `ip:port`), fulfilling Phase 10 design requirements early.
+  - **`core/transport/__init__.py`**: Re-exports all transport classes, helpers, and timeouts.
+- **`tests/test_transport.py`**: 9 automated unit and integration tests covering loopback framing, connect timeouts, bidirectional encrypted messaging, wire tampering rejection, full end-to-end mutual session establishment with chat and binary file chunks, session manager device_id tracking, session closure errors, handshake timeout aborts, and revoked peer rejection.
+- **`.github/workflows/tests.yml`**: Added `tests/test_transport.py` to the CI pytest suite.
+- **`pyproject.toml`**: Added `"core.transport"` package, bumped version to `1.9.0`.
+
+### Compatibility
+- Purely additive module. Existing `peer.py` and stage scripts continue to pass without changes. Version bumped to `1.9.0` (MINOR: whole phase complete).
+
 ## [1.8.0] — Phase 8 complete: ChaCha20-Poly1305 encrypted channel
 
 ### Added

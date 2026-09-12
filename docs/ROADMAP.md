@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **1.8.0** (see `../CHANGELOG.md` for full detail on every
+Current version: **1.9.0** (see `../CHANGELOG.md` for full detail on every
 release). This file is the scannable status view; `IMPLEMENTATION_PLAN.md`
 has the full per-phase design detail, and `SECURE_STORAGE_DESIGN.md` has
 the detailed design for Phase 39 specifically.
@@ -22,10 +22,11 @@ when a whole phase completes, MAJOR deferred (no external users yet).
 | `1.6.0` | 6 | `core/crypto/`: ephemeral X25519 key exchange, authenticated 3-way handshake with Ed25519 transcript signatures, TrustStore integration |
 | `1.7.0` | 7 | `core/crypto/kdf.py`: HKDF-SHA256 session key derivation with domain separation, directional tx/rx keys, and transcript hash binding |
 | `1.8.0` | 8 | `core/crypto/encryption.py`: ChaCha20-Poly1305 AEAD encrypted channel (`SecureChannel`, deterministic sequence-derived nonce) |
+| `1.9.0` | 9 | `core/transport/`: decoupled transport layer (`SecureSession`, `EncryptedTransport`, `TCPConnection`, `SecureSessionManager`, timeouts) |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
-Store), Phase 6 (Secure Handshake), Phase 7 (Session Keys), and Phase 8
-(ChaCha20-Poly1305 Encryption) are complete.**
+Store), Phase 6 (Secure Handshake), Phase 7 (Session Keys), Phase 8
+(ChaCha20-Poly1305 Encryption), and Phase 9 (Secure Transport Layer) are complete.**
 
 ## Designed, not yet coded
 
@@ -43,7 +44,8 @@ Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
 disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
-1. **Phase 9 — Secure Transport Layer** ← next
+1. **Phase 12/13-20 — File Transfer V2 + remaining hardening** ← next
+
 
 
 5. Phase 12/13-20 — File Transfer V2 + remaining hardening (path
