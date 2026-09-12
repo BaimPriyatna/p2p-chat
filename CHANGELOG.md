@@ -8,40 +8,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - Nothing yet
 
-## [1.8.0] — Phase 8 complete: ChaCha20-Poly1305 AEAD encryption layer
+## [1.8.0] — Phase 8 complete: ChaCha20-Poly1305 encrypted channel
 
 ### Added
-- **`core/crypto/encryption.py`** (Phase 8):
-  - RFC 8439 ChaCha20-Poly1305 AEAD symmetric cipher integration: `encrypt()`, `decrypt()`, `encrypt_frame()`, `decrypt_frame()`.
-  - Wire framing format via `EncryptedFrame`:
-    `[8 bytes sequence (uint64)][12 bytes nonce][N bytes ciphertext][16 bytes Poly1305 tag]`.
-  - Serialization and deserialization methods `pack()` and `unpack()`.
-  - Associated Authenticated Data (AAD) binding: sequence numbers are bound directly into the Poly1305 authentication tag, preventing any in-transit tampering of message order or frame header metadata.
-  - Stateful `FrameEncryptor`:
-    - Monotonically increasing 64-bit sequence counters.
-    - Deterministic 12-byte nonce generation with session context salt prefix.
-    - Strict nonce uniqueness enforcement (`NonceReuseError`).
-    - Sequence counter overflow detection (`SequenceOverflowError`).
-  - Stateful `FrameDecryptor`:
-    - Monotonic sequence verification (`strict_order=True` default).
-    - Immediate rejection of replayed frames (`ReplayError`).
-    - Immediate rejection of out-of-order or duplicate sequence numbers.
-    - Tamper detection against modified ciphertexts, tags, nonces, or sequence metadata (`AuthenticationError`).
-  - Bidirectional `SessionCipher`:
-    - Convenient bridge taking Phase 7 `SessionKeys`: `from_session_keys(session_keys)`.
-    - Integrates directional `send_key` with `FrameEncryptor` and `recv_key` with `FrameDecryptor`.
-    - Inherent protection against reflection attacks due to directional key separation.
-- **`core/crypto/__init__.py`**:
-  - Re-exports `EncryptedFrame`, `EncryptionError`, `AuthenticationError`, `ReplayError`, `NonceReuseError`, `SequenceOverflowError`, `encrypt`, `decrypt`, `encrypt_frame`, `decrypt_frame`, `FrameEncryptor`, `FrameDecryptor`, and `SessionCipher`.
-- **`tests/test_encryption.py`**:
-  - Full automated coverage: RFC 8439 Section 2.8.2 official test vectors, `EncryptedFrame` pack/unpack and boundary checks, tamper resistance across all frame elements, replay attacks, out-of-order rejection, nonce uniqueness, bidirectional session communication, reflection attack immunity, empty payloads, and large 1 MB binary chunks.
-- **`pyproject.toml`**:
-  - Added `[tool.pytest.ini_options]` with `pythonpath = ["."]`.
-- **`.github/workflows/tests.yml`**:
-  - Added `tests/test_encryption.py` to the CI pytest suite.
+- **`core/crypto/encryption.py`** (Phase 8): `SecureChannel` — a ChaCha20-Poly1305
+  AEAD channel built on Phase 7's `SessionKeys` (independent `send_key`/`recv_key`
+  per direction).
+  - **Sequence-derived nonce, not random**: `nonce = sequence.to_bytes(12, "big")`.
+    Uniqueness is guaranteed by construction (a monotonic counter can't repeat
+    within a session) rather than relying on random-96-bit collision odds — and
+    it means the nonce never needs to travel on the wire, since both sides
+    already track their own counter.
+  - `encrypt(plaintext, associated_data=b"")` → `EncryptedFrame(sequence, ciphertext)`,
+    auto-incrementing sequence.
+  - `decrypt(sequence, ciphertext, associated_data=b"")` enforces **strict,
+    gap-free sequence order** per direction — a replayed frame, an
+    out-of-order frame, or a frame from a different session's keys are all
+    rejected (`ReplayOrReorderError` / `DecryptionError`), the same rigor
+    already applied to file_data chunks' sequence+offset checks (BUG-008).
+  - `SequenceExhaustedError` if a direction's 12-byte counter would overflow
+    (a session must be re-handshaked at that point, not reused past it).
+- 11 new tests (`tests/test_encryption.py`): round-trip, sequence tracking,
+  tampered ciphertext, wrong key, replay, out-of-order, direction
+  independence (a channel can't decrypt its own sent traffic), nonce
+  determinism, sequence range validation, key-length validation, AAD
+  mismatch detection.
 
 ### Compatibility
-- Additive module. No breaking changes. Version bumped to `1.8.0` (MINOR: whole phase complete).
+- Purely additive — no existing module touched. Not yet wired into
+  `peer.py`'s connection handling (that's Phase 9, Secure Transport Layer).
+- Verified: full 44-test pytest suite + 4 stage sanity scripts, all passing.
 
 ## [1.7.0] — Phase 7 complete: session key derivation (X25519 + HKDF)
 

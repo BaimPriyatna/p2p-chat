@@ -3,30 +3,19 @@
     key_exchange.py — Ephemeral X25519 keypair generation and DH exchange (Phase 6.1)
     handshake.py    — Secure authenticated handshake state machine & transport (Phase 6.2)
     kdf.py          — HKDF-SHA256 session key derivation (Phase 7)
-    encryption.py   — ChaCha20-Poly1305 AEAD stream/frame encryption (Phase 8)
+    encryption.py   — ChaCha20-Poly1305 AEAD channel, sequence-derived nonces (Phase 8)
 """
 
 from .encryption import (
-    HEADER_LEN,
     KEY_LEN,
     MAX_SEQUENCE,
-    MIN_FRAME_LEN,
     NONCE_LEN,
-    SEQUENCE_LEN,
-    TAG_LEN,
-    AuthenticationError,
+    DecryptionError,
     EncryptedFrame,
     EncryptionError,
-    FrameDecryptor,
-    FrameEncryptor,
-    NonceReuseError,
-    ReplayError,
-    SequenceOverflowError,
-    SessionCipher,
-    decrypt,
-    decrypt_frame,
-    encrypt,
-    encrypt_frame,
+    ReplayOrReorderError,
+    SecureChannel,
+    SequenceExhaustedError,
 )
 from .handshake import (
     HANDSHAKE_TIMEOUT,
@@ -83,25 +72,13 @@ __all__ = [
     "SessionKeys",
     "derive_session_keys",
     "KEY_LEN",
-    "NONCE_LEN",
-    "TAG_LEN",
-    "SEQUENCE_LEN",
-    "HEADER_LEN",
-    "MIN_FRAME_LEN",
     "MAX_SEQUENCE",
-    "EncryptionError",
-    "AuthenticationError",
-    "ReplayError",
-    "NonceReuseError",
-    "SequenceOverflowError",
+    "NONCE_LEN",
+    "DecryptionError",
     "EncryptedFrame",
-    "encrypt",
-    "decrypt",
-    "encrypt_frame",
-    "decrypt_frame",
-    "FrameEncryptor",
-    "FrameDecryptor",
-    "SessionCipher",
+    "EncryptionError",
+    "ReplayOrReorderError",
+    "SecureChannel",
+    "SequenceExhaustedError",
 ]
-
 

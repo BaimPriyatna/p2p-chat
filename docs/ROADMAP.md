@@ -21,7 +21,7 @@ when a whole phase completes, MAJOR deferred (no external users yet).
 | `1.5.0` | 4.2 | `core/trust/revocation.py`: local device revocation with audit trail |
 | `1.6.0` | 6 | `core/crypto/`: ephemeral X25519 key exchange, authenticated 3-way handshake with Ed25519 transcript signatures, TrustStore integration |
 | `1.7.0` | 7 | `core/crypto/kdf.py`: HKDF-SHA256 session key derivation with domain separation, directional tx/rx keys, and transcript hash binding |
-| `1.8.0` | 8 | `core/crypto/encryption.py`: ChaCha20-Poly1305 AEAD frame encryption, sequence AAD binding, replay/reorder protection, and `SessionCipher` |
+| `1.8.0` | 8 | `core/crypto/encryption.py`: ChaCha20-Poly1305 AEAD encrypted channel (`SecureChannel`, deterministic sequence-derived nonce) |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 6 (Secure Handshake), Phase 7 (Session Keys), and Phase 8
