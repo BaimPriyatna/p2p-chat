@@ -4,11 +4,33 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
+ 
+ ### Added
+ - Nothing yet
+
+## [1.10.0] — Phase 12/13–20 complete: File Transfer V2 + Hardening
 
 ### Added
-- Nothing yet
+- **`core/transfer/`** (Phases 12–20) — Modular, hardened file transfer subsystem:
+  - **`hashing.py`** (Phase 17): `sha256_file(path)` streaming hash calculation (64 KB chunks) and `IncrementalHasher` for chunk-by-chunk verification without re-reading from disk.
+  - **`chunker.py`** (Phase 12): `read_chunks()` generator yielding `(sequence, offset, chunk_bytes)` with configurable chunk size (default 64 KB) and `start_offset` parameter for resume support.
+  - **`resume.py`** (Phase 16): `.part` staging file lifecycle management (`get_part_path`, `get_partial_bytes`, `cleanup_part_file`), and atomic renaming via `finalize_part_file()` (`os.replace`) preventing incomplete or corrupted files from being exposed to the user.
+  - **`receiver.py`** (Phases 13–17, 20): `FileReceiver` state machine managing inbound file streams with:
+    - Pre-flight free disk space check (`check_disk_space`) requiring `declared_size + 50 MB` safety margin before accepting transfer.
+    - Path traversal prevention (`resolve_safe_dest_path`) stripping directory separators, resolving canonical paths, and confining all writes to the target downloads directory.
+    - Strict sequence order and cumulative byte offset validation (`ChunkValidationError`) preventing out-of-order, replayed, or oversized chunks.
+    - Staging writes into `.part` files and SHA-256 integrity verification upon completion before atomic rename.
+    - Partial file resume detection returning current bytes received for seamless transfer resumption.
+  - **`sender.py`** (Phases 12, 16, 19): `FileSender` state machine managing outbound file streaming from any resume offset, progress calculation, and delivery acknowledgment awaiting with timeout (`file_complete_ack`).
+  - **`manager.py`** (Phases 12, 20): `FileTransferManager` coordinating active transfers, enforcing global limits (`MAX_CONCURRENT_TRANSFERS = 5`, `MAX_TOTAL_INCOMING_SIZE = 10 GB`, `MAX_INCOMING_FILE_SIZE = 2 GB`), and tracking active transfer registry.
+  - **`core/transfer/__init__.py`**: Re-exports all transfer classes, exceptions, and utility functions.
+- **`file_transfer.py`**: Refactored to delegate to `core.transfer` modules while preserving 100% backward compatibility for existing callers (`peer.py`, `ui.py`, test scripts) and internal attributes (`_incoming`, `_outgoing`, `dest_path`, `_safe_dest_path`, callbacks).
+- **`tests/test_file_transfer_v2.py`**: 8 automated tests covering hashing, chunk offset seeking, `.part` lifecycle, atomic renaming, path traversal rejection, disk space pre-flight validation, sender-receiver roundtrip verification, resume from partial file, chunk sequence/overflow rejection, and concurrency/size limits.
+- **`.github/workflows/tests.yml`**: Added `tests/test_file_transfer_v2.py` to the automated CI test matrix.
+- **`pyproject.toml`**: Added `"core.transfer"` package and bumped version to `1.10.0`.
 
-## [1.9.0] — Phase 9 complete: Secure Transport Layer
+### Compatibility
+- Full backward compatibility maintained for existing UI and peer components. All 61 pytest tests and 4 stage sanity scripts pass without regression. Version bumped to `1.10.0` (MINOR: whole phase complete).
 
 ### Added
 - **`core/transport/`** (Phase 9) — Decoupled secure transport architecture (`Application -> SecureSession -> EncryptedTransport -> TCP`):

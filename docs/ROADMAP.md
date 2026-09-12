@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **1.9.0** (see `../CHANGELOG.md` for full detail on every
+Current version: **1.10.0** (see `../CHANGELOG.md` for full detail on every
 release). This file is the scannable status view; `IMPLEMENTATION_PLAN.md`
 has the full per-phase design detail, and `SECURE_STORAGE_DESIGN.md` has
 the detailed design for Phase 39 specifically.
@@ -23,10 +23,12 @@ when a whole phase completes, MAJOR deferred (no external users yet).
 | `1.7.0` | 7 | `core/crypto/kdf.py`: HKDF-SHA256 session key derivation with domain separation, directional tx/rx keys, and transcript hash binding |
 | `1.8.0` | 8 | `core/crypto/encryption.py`: ChaCha20-Poly1305 AEAD encrypted channel (`SecureChannel`, deterministic sequence-derived nonce) |
 | `1.9.0` | 9 | `core/transport/`: decoupled transport layer (`SecureSession`, `EncryptedTransport`, `TCPConnection`, `SecureSessionManager`, timeouts) |
+| `1.10.0` | 12/13–20 | `core/transfer/`: modular File Transfer V2 (streaming SHA-256, chunker, `.part` resume, atomic rename, pre-flight disk check, limits) |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 6 (Secure Handshake), Phase 7 (Session Keys), Phase 8
-(ChaCha20-Poly1305 Encryption), and Phase 9 (Secure Transport Layer) are complete.**
+(ChaCha20-Poly1305 Encryption), Phase 9 (Secure Transport Layer), and
+Phase 12–20 (File Transfer V2 + Hardening) are complete.**
 
 ## Designed, not yet coded
 
@@ -44,22 +46,15 @@ Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
 disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
-1. **Phase 12/13-20 — File Transfer V2 + remaining hardening** ← next
-
-
-
-5. Phase 12/13-20 — File Transfer V2 + remaining hardening (path
-   traversal/size/chunk fixes are already done — see BUG_REPORT.md; this
-   is the rest)
-6. Phase 5 — Discovery V2
-7. Phase 26/30 — Event architecture, security test cases
-8. **Phase 39 — Secure Storage** (design-complete, see above)
-9. Phase 36/37 — UI/security UX
-10. Phase 28-35 — logging, performance, concurrency, state machines,
-    error protocol
-11. Phase 38 — Project structure final (**not done now, deliberately** —
-    see note below)
-12. Security audit, release
+1. **Phase 5 — Discovery V2** ← next
+2. Phase 26/30 — Event architecture, security test cases
+3. **Phase 39 — Secure Storage** (design-complete, see above)
+4. Phase 36/37 — UI/security UX
+5. Phase 28-35 — logging, performance, concurrency, state machines,
+   error protocol
+6. Phase 38 — Project structure final (**not done now, deliberately** —
+   see note below)
+7. Security audit, release
 
 ## Why Phase 38 (final project structure) isn't done yet
 
