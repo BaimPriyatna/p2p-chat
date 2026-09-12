@@ -1,4 +1,4 @@
-"""core/trust/store.py — SQLite-backed trusted_devices store (Phase 4).
+"""core/trust/store.py — SQLite-backed trusted_devices store (Phase 4/40).
 
 TOFU (trust-on-first-use) is intentionally split into two steps that never
 happen automatically together:
@@ -13,6 +13,11 @@ happen automatically together:
        TOFU. (Re-approving a changed key, if ever wanted, is a distinct,
        explicit operation for a later phase, not something check() does.)
 
+Phase 40 adds the identity_transitions table: a cryptographically proven
+chain of device_id rotations.  record_rotation() verifies a TransitionCertificate
+and carries TRUSTED status forward; check_with_rotation() is a drop-in
+replacement for check() that understands rotation history.
+
 Not thread-safe across threads (sqlite3 default); fine for this app, which
 drives everything from a single asyncio event loop.
 """
@@ -21,9 +26,12 @@ import enum
 import os
 import sqlite3
 import time
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from .device import TrustedDevice, TrustStatus
+
+if TYPE_CHECKING:
+    from core.identity.rotation import TransitionCertificate
 
 DEFAULT_DB_PATH = os.path.expanduser("~/.peerc/trust.db")
 
@@ -38,7 +46,17 @@ CREATE TABLE IF NOT EXISTS trusted_devices (
     revoked_by    TEXT,
     revoked_at    REAL,
     revoke_reason TEXT
-)
+);
+CREATE TABLE IF NOT EXISTS identity_transitions (
+    old_device_id TEXT NOT NULL,
+    new_device_id TEXT NOT NULL,
+    old_public_key TEXT NOT NULL,
+    new_public_key TEXT NOT NULL,
+    timestamp      REAL NOT NULL,
+    signature      TEXT NOT NULL,
+    recorded_at    REAL NOT NULL,
+    PRIMARY KEY (old_device_id, new_device_id)
+);
 """
 
 
@@ -58,7 +76,7 @@ class TrustStore:
             os.makedirs(directory, exist_ok=True)
         self._conn = sqlite3.connect(db_path)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute(_SCHEMA)
+        self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
     def close(self) -> None:
@@ -158,6 +176,172 @@ class TrustStore:
         )
         self._conn.commit()
         return self.get(device_id)
+
+    # ---- Phase 40: key rotation -------------------------------------------
+
+    def record_rotation(self, cert: "TransitionCertificate") -> None:
+        """Record a verified key rotation and carry TRUSTED status forward.
+
+        Steps:
+          1. Verify the TransitionCertificate signature (raises RotationError on
+             failure — never silently accept an unverified cert).
+          2. Check that old_device_id is not REVOKED (a revoked device may not
+             silently bootstrap a new identity via rotation).
+          3. Insert the transition record into identity_transitions.
+          4. If old_device_id was TRUSTED, insert (or update) new_device_id in
+             trusted_devices with TRUSTED status, inheriting the old device's
+             name.  PENDING is deliberately NOT carried over — the user hasn't
+             explicitly approved this device yet, so the new key is also PENDING.
+
+        Raises RotationError if the cert is invalid or if old_device_id is REVOKED.
+        """
+        # Inline import to avoid a circular-import chain at module load time.
+        from core.identity.rotation import RotationError, verify_transition_certificate
+
+        if not verify_transition_certificate(cert):
+            raise RotationError(
+                f"TransitionCertificate signature is invalid for rotation "
+                f"{cert.old_device_id!r} → {cert.new_device_id!r}"
+            )
+
+        old_device = self.get(cert.old_device_id)
+        if old_device is not None and old_device.status == TrustStatus.REVOKED:
+            raise RotationError(
+                f"old device_id {cert.old_device_id!r} is REVOKED — "
+                "a revoked device cannot authorise a key rotation"
+            )
+
+        now = time.time()
+        self._conn.execute(
+            """
+            INSERT OR REPLACE INTO identity_transitions
+                (old_device_id, new_device_id, old_public_key, new_public_key,
+                 timestamp, signature, recorded_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                cert.old_device_id,
+                cert.new_device_id,
+                cert.old_public_key,
+                cert.new_public_key,
+                cert.timestamp,
+                cert.signature,
+                now,
+            ),
+        )
+
+        # Only TRUSTED carries over — PENDING stays PENDING (or UNKNOWN stays
+        # UNKNOWN until the user explicitly approves).
+        if old_device is not None and old_device.status == TrustStatus.TRUSTED:
+            existing_new = self.get(cert.new_device_id)
+            if existing_new is None:
+                self._conn.execute(
+                    """
+                    INSERT INTO trusted_devices
+                        (device_id, public_key, name, first_seen, last_seen, status)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cert.new_device_id,
+                        cert.new_public_key,
+                        old_device.name,
+                        now,
+                        now,
+                        TrustStatus.TRUSTED.value,
+                    ),
+                )
+            elif existing_new.status not in (TrustStatus.TRUSTED, TrustStatus.REVOKED):
+                # Promote PENDING → TRUSTED if a valid rotation backs it.
+                self._conn.execute(
+                    "UPDATE trusted_devices SET status = ?, last_seen = ? WHERE device_id = ?",
+                    (TrustStatus.TRUSTED.value, now, cert.new_device_id),
+                )
+
+        self._conn.commit()
+
+    def get_rotation_chain(self, device_id: str) -> list[str]:
+        """Return all device_ids that belong to the same rotation chain as *device_id*.
+
+        Traverses identity_transitions both forward (as old_device_id) and
+        backward (as new_device_id) to build the complete chain.  The returned
+        list is ordered from oldest to newest device_id, with *device_id*
+        included wherever it falls in that chain.
+
+        Returns [device_id] if the device has no rotation history.
+        """
+        # Collect the entire reachable graph using a simple BFS.
+        visited: set[str] = set()
+        queue = [device_id]
+        while queue:
+            current = queue.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            # Successors: device_ids this one rotated TO.
+            rows = self._conn.execute(
+                "SELECT new_device_id FROM identity_transitions WHERE old_device_id = ?",
+                (current,),
+            ).fetchall()
+            queue.extend(r[0] for r in rows)
+            # Predecessors: device_ids that rotated INTO this one.
+            rows = self._conn.execute(
+                "SELECT old_device_id FROM identity_transitions WHERE new_device_id = ?",
+                (current,),
+            ).fetchall()
+            queue.extend(r[0] for r in rows)
+
+        # Order by the timestamp of the transition that introduced each node;
+        # the very first device_id has no predecessor row, so it sorts to 0.
+        def _order_key(did: str) -> float:
+            row = self._conn.execute(
+                "SELECT timestamp FROM identity_transitions WHERE new_device_id = ?",
+                (did,),
+            ).fetchone()
+            return row[0] if row else 0.0
+
+        return sorted(visited, key=_order_key)
+
+    def check_with_rotation(
+        self, device_id: str, public_key: str
+    ) -> "TrustDecision":
+        """Like check(), but also accepts a new device_id that has a valid
+        rotation chain leading back to a TRUSTED old device_id.
+
+        Decision priority (same as check() for all existing cases, with one
+        addition):
+          REVOKED      — device or ANY node in the rotation chain is REVOKED
+                         (REVOKED is a terminal taint on the whole chain —
+                         SECURITY_MODEL.md §17)
+          TRUSTED      — device is directly trusted, OR has a rotation chain
+                         from a TRUSTED predecessor (and no REVOKED anywhere)
+          PENDING      — seen once but not yet approved
+          UNKNOWN      — never seen before and no trusted chain
+          KEY_CHANGED  — device_id known, but public_key does not match
+        """
+        # KEY_CHANGED: public_key doesn't match stored record — reject early.
+        direct = self.check(device_id, public_key)
+        if direct == TrustDecision.KEY_CHANGED:
+            return direct
+
+        # Always walk the whole chain to detect REVOKED anywhere — REVOKED is
+        # a terminal state that taints every node in the chain (§17), so we
+        # cannot short-circuit on TRUSTED without first ruling out revocation.
+        chain = self.get_rotation_chain(device_id)
+        chain_has_trusted = False
+
+        for chain_id in chain:
+            node = self.get(chain_id)
+            if node is None:
+                continue
+            if node.status == TrustStatus.REVOKED:
+                return TrustDecision.REVOKED
+            if node.status == TrustStatus.TRUSTED:
+                chain_has_trusted = True
+
+        if chain_has_trusted:
+            return TrustDecision.TRUSTED
+
+        return direct
 
 
 def _row_to_device(row: sqlite3.Row) -> TrustedDevice:

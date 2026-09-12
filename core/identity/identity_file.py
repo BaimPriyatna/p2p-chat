@@ -111,3 +111,69 @@ def _create_new(name: str, identity_file: str, key_store: KeyStore) -> DeviceIde
         json.dump(meta, f, indent=2)
 
     return DeviceIdentity(keypair=keypair, name=name, created_at=created_at, storage_backend=backend_used)
+
+
+def rotate_identity(
+    current: "DeviceIdentity",
+    new_name: str | None = None,
+    identity_file: str = DEFAULT_IDENTITY_FILE,
+    key_store: KeyStore | None = None,
+) -> tuple["DeviceIdentity", "TransitionCertificate"]:
+    """Replace the device's Ed25519 keypair and produce a Transition Certificate.
+
+    The old private key signs the new public key before being discarded, so
+    any peer that already trusts this device can verify the rotation and carry
+    TRUSTED status forward to the new device_id automatically — no fresh TOFU
+    needed (SECURITY_MODEL.md §15).
+
+    Returns (new_DeviceIdentity, TransitionCertificate).  The caller is
+    responsible for passing the certificate to TrustStore.record_rotation()
+    and for distributing the cert to peers (e.g. via the handshake protocol).
+
+    This is PLANNED rotation only — for a compromise-triggered rotation
+    simply call load_or_create_identity() after deleting the identity file,
+    and do NOT create a TransitionCertificate from the compromised key.
+    """
+    # Import here to avoid circular imports between identity and rotation.
+    from .rotation import TransitionCertificate, create_transition_certificate
+
+    key_store = key_store or KeyStore()
+
+    # 1. Generate the new keypair BEFORE touching any stored state.
+    new_keypair = generate_keypair()
+
+    # 2. Produce the certificate while the old private key is still in memory.
+    cert: TransitionCertificate = create_transition_certificate(current.keypair, new_keypair)
+
+    # 3. Persist the new private key (overwrites the old one under the same
+    #    username — there is only ever one active identity key).
+    backend_used = key_store.save_private_key(KEYRING_USERNAME, new_keypair.private_key_pem())
+
+    # 4. Overwrite identity.json with new public metadata, recording where we
+    #    rotated from so the file is self-documenting.
+    name = new_name or current.name
+    created_at = time.time()
+
+    directory = os.path.dirname(identity_file)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+
+    meta = {
+        "version": IDENTITY_SCHEMA_VERSION,
+        "device_id": new_keypair.device_id,
+        "public_key": base64.b64encode(new_keypair.public_key_bytes()).decode("ascii"),
+        "name": name,
+        "created_at": created_at,
+        "rotated_from": current.keypair.device_id,
+    }
+    with open(identity_file, "w") as f:
+        json.dump(meta, f, indent=2)
+
+    new_identity = DeviceIdentity(
+        keypair=new_keypair,
+        name=name,
+        created_at=created_at,
+        storage_backend=backend_used,
+    )
+    return new_identity, cert
+

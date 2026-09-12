@@ -24,18 +24,19 @@ when a whole phase completes, MAJOR deferred (no external users yet).
 | `1.8.0` | 8 | `core/crypto/encryption.py`: ChaCha20-Poly1305 AEAD encrypted channel (`SecureChannel`, deterministic sequence-derived nonce) |
 | `1.9.0` | 9 | `core/transport/`: decoupled transport layer (`SecureSession`, `EncryptedTransport`, `TCPConnection`, `SecureSessionManager`, timeouts) |
 | `1.10.0` | 12/13–20 | `core/transfer/`: modular File Transfer V2 (streaming SHA-256, chunker, `.part` resume, atomic rename, pre-flight disk check, limits) |
+| Unreleased | 40 | `core/identity/rotation.py` [NEW]: `TransitionCertificate`, `create_transition_certificate`, `verify_transition_certificate`; `rotate_identity()` in `identity_file.py`; `identity_transitions` table + `record_rotation`/`get_rotation_chain`/`check_with_rotation` in `TrustStore` |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 6 (Secure Handshake), Phase 7 (Session Keys), Phase 8
-(ChaCha20-Poly1305 Encryption), Phase 9 (Secure Transport Layer), and
-Phase 12–20 (File Transfer V2 + Hardening) are complete.**
+(ChaCha20-Poly1305 Encryption), Phase 9 (Secure Transport Layer),
+Phase 12–20 (File Transfer V2 + Hardening), and Phase 40 (Device Key
+Rotation) are complete.**
 
 ## Designed, not yet coded
 
 | Phase | What | Where |
 |---|---|---|
 | 39 | Secure Storage (at-rest encryption: passphrase/recovery-code envelope encryption, encrypted vault DB, secure/normal file storage, viewer-cache mitigation) | `SECURE_STORAGE_DESIGN.md` — architecture and every implementation-level detail (schema, key formats, nonce handling, DB lifecycle) fully resolved |
-| 40 | Device Key Rotation (transition certificates: old key signs new key, so a peer's trust carries over automatically) | `SECURITY_MODEL.md` §13–16 |
 | 41 | Security Event Logging (INFO/WARNING/HIGH/CRITICAL classification, extends Phase 28) | `SECURITY_MODEL.md` §29 |
 | 42 | Group Authority System (admin-managed membership, policy enforced in core, multi-admin threshold signatures, audit log) | `GROUP_AUTHORITY_DESIGN.md` |
 | 43 | Group-Gated Export Authorization (admin capability AND personal critical-action key, not either/or) | `GROUP_AUTHORITY_DESIGN.md` §Export Authorization |
@@ -58,21 +59,20 @@ Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
 disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
-1. **Phase 40 — Device Key Rotation** ← next
-2. Phase 41 — Security Event Logging
-3. Phase 5 — Discovery V2
-4. Phase 26 — Event architecture
-5. **Phase 39 — Secure Storage** (design-complete, see above)
-6. **Phase 42 — Group Authority System** (design-complete)
-7. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)
-8. **Phase 44 — Internet P2P Connectivity** (design-complete)
-9. Phase 45/46 — Rendezvous, NAT Traversal & Relay (optional, design-complete)
-10. Phase 36/37 — UI/security UX
-11. Phase 28-35 — logging, performance, concurrency, state machines,
+1. **Phase 41 — Security Event Logging** ← next
+2. Phase 5 — Discovery V2
+3. Phase 26 — Event architecture
+4. **Phase 39 — Secure Storage** (design-complete, see above)
+5. **Phase 42 — Group Authority System** (design-complete)
+6. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)
+7. **Phase 44 — Internet P2P Connectivity** (design-complete)
+8. Phase 45/46 — Rendezvous, NAT Traversal & Relay (optional, design-complete)
+9. Phase 36/37 — UI/security UX
+10. Phase 28-35 — logging, performance, concurrency, state machines,
     error protocol
-12. Phase 38 — Project structure final (**not done now, deliberately** —
+11. Phase 38 — Project structure final (**not done now, deliberately** —
     see note below)
-13. Security audit, release
+12. Security audit, release
 
 ## Why Phase 38 (final project structure) isn't done yet
 

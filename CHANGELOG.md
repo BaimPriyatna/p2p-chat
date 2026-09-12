@@ -4,9 +4,34 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
- 
- ### Added
- - Nothing yet
+
+### Added
+- **Phase 40 — Device Key Rotation** (`core/identity/rotation.py`,
+  `core/identity/identity_file.py`, `core/trust/store.py`):
+  - **`core/identity/rotation.py`** [NEW]: `TransitionCertificate` dataclass and
+    two pure functions — `create_transition_certificate(old_keypair, new_keypair)`
+    (signs the rotation with the old private key) and
+    `verify_transition_certificate(cert)` (verifies the signature, returns bool).
+    Canonical payload uses a `peerc-key-rotation` domain-separation prefix and
+    struct-packed timestamp to prevent cross-protocol signature reuse.
+  - **`rotate_identity()`** added to `core/identity/identity_file.py`: generates
+    a new Ed25519 keypair, produces a `TransitionCertificate` while the old key
+    is still in memory, overwrites `KeyStore` and `identity.json` atomically, and
+    records `rotated_from` in the JSON for auditability.
+  - **`TrustStore.record_rotation(cert)`**: verifies the cert, inserts the
+    transition into the new `identity_transitions` SQLite table, and
+    automatically carries `TRUSTED` status forward to the new `device_id`
+    (PENDING and REVOKED are deliberately not carried — per SECURITY_MODEL.md §15).
+  - **`TrustStore.get_rotation_chain(device_id)`**: BFS traversal of
+    `identity_transitions` returning all `device_id`s in the same rotation
+    chain, ordered oldest → newest.
+  - **`TrustStore.check_with_rotation(device_id, public_key)`**: drop-in
+    replacement for `check()` that understands rotation history; REVOKED
+    anywhere in the chain taints the whole chain (§17 fail-closed).
+  - **`tests/test_rotation.py`** [NEW]: 12 test cases covering create + verify,
+    tampered cert, wrong signing key, TRUSTED carry-over, PENDING stays PENDING,
+    REVOKED blocks rotation, compromise rotation produces UNKNOWN, multi-hop
+    chain ordering, and all `check_with_rotation` branches.
 
 ## [1.10.0] — Phase 12/13–20 complete: File Transfer V2 + Hardening
 
