@@ -3,8 +3,20 @@
     key_exchange.py — Ephemeral X25519 keypair generation and DH exchange (Phase 6.1)
     handshake.py    — Secure authenticated handshake state machine & transport (Phase 6.2)
     kdf.py          — HKDF-SHA256 session key derivation (Phase 7)
+    encryption.py   — ChaCha20-Poly1305 AEAD channel, sequence-derived nonces (Phase 8)
 """
 
+from .encryption import (
+    KEY_LEN,
+    MAX_SEQUENCE,
+    NONCE_LEN,
+    DecryptionError,
+    EncryptedFrame,
+    EncryptionError,
+    ReplayOrReorderError,
+    SecureChannel,
+    SequenceExhaustedError,
+)
 from .handshake import (
     HANDSHAKE_TIMEOUT,
     DeviceRevokedError,
@@ -59,5 +71,14 @@ __all__ = [
     "KDFError",
     "SessionKeys",
     "derive_session_keys",
+    "KEY_LEN",
+    "MAX_SEQUENCE",
+    "NONCE_LEN",
+    "DecryptionError",
+    "EncryptedFrame",
+    "EncryptionError",
+    "ReplayOrReorderError",
+    "SecureChannel",
+    "SequenceExhaustedError",
 ]
 
