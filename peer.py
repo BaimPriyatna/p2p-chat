@@ -43,10 +43,17 @@ class ConnectionManager:
     peer_id -> addr_key using the discovery peer list.
     """
 
-    def __init__(self, listen_port: int, on_message: OnMessage, max_connections: int = MAX_CONNECTIONS):
+    def __init__(
+        self,
+        listen_port: int,
+        on_message: Optional[OnMessage] = None,
+        max_connections: int = MAX_CONNECTIONS,
+        event_bus: Optional[object] = None,
+    ):
         self.listen_port = listen_port
         self.on_message = on_message
         self.max_connections = max_connections
+        self.event_bus = event_bus
         self._connections: dict[str, Connection] = {}
         self._server: Optional[asyncio.base_events.Server] = None
 
@@ -73,6 +80,9 @@ class ConnectionManager:
 
         conn = Connection(reader, writer, addr_key)
         self._connections[addr_key] = conn
+        if self.event_bus:
+            from core.events import PeerConnected
+            await self.event_bus.publish(PeerConnected(addr_key=addr_key, incoming=True))
         await self._read_loop(conn)
 
     async def connect_to(self, ip: str, port: int) -> str:
@@ -94,6 +104,9 @@ class ConnectionManager:
         )
         conn = Connection(reader, writer, addr_key)
         self._connections[addr_key] = conn
+        if self.event_bus:
+            from core.events import PeerConnected
+            await self.event_bus.publish(PeerConnected(addr_key=addr_key, incoming=False))
         # Run the read loop in the background so this call returns immediately
         asyncio.create_task(self._read_loop(conn))
         return addr_key
@@ -104,7 +117,13 @@ class ConnectionManager:
                 kind, payload = await protocol.read_any_frame(conn.reader)
                 if kind == "json":
                     protocol.validate_message(payload)  # raises ProtocolError if malformed
-                    await self.on_message(conn.addr_key, payload)
+                    if self.event_bus:
+                        from core.events import NetworkMessageReceived
+                        await self.event_bus.publish(
+                            NetworkMessageReceived(addr_key=conn.addr_key, message=payload, kind="json")
+                        )
+                    if self.on_message:
+                        await self.on_message(conn.addr_key, payload)
                 else:
                     # Binary frame (Phase 1.3): currently only used for
                     # file_data chunks. Decode into a dict shape so the
@@ -113,7 +132,13 @@ class ConnectionManager:
                     # any other message type.
                     decoded = protocol.decode_file_data(payload)  # raises ProtocolError if too short
                     decoded["type"] = "file_data"
-                    await self.on_message(conn.addr_key, decoded)
+                    if self.event_bus:
+                        from core.events import NetworkMessageReceived
+                        await self.event_bus.publish(
+                            NetworkMessageReceived(addr_key=conn.addr_key, message=decoded, kind="binary")
+                        )
+                    if self.on_message:
+                        await self.on_message(conn.addr_key, decoded)
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass  # peer disconnected
         except protocol.ProtocolError:
@@ -121,6 +146,9 @@ class ConnectionManager:
         finally:
             self._connections.pop(conn.addr_key, None)
             conn.writer.close()
+            if self.event_bus:
+                from core.events import PeerDisconnected
+                await self.event_bus.publish(PeerDisconnected(addr_key=conn.addr_key))
 
     async def send(self, addr_key: str, message: dict) -> bool:
         """Send a JSON control message on an already-open connection. Returns False if not connected."""

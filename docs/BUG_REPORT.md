@@ -477,7 +477,7 @@ parsing). Belum ada coverage untuk: spoofed identity, MITM, revoked device
 
 Belum berubah dari laporan sebelumnya — masih backlog.
 
-### ARCH-001 — `on_message` Handler Chaining
+### ARCH-001 — `on_message` Handler Chaining [RESOLVED in v1.14.0 / Phase 26]
 
 ```
 ConnectionManager
@@ -490,7 +490,9 @@ UI handshake
 ```
 
 masing-masing melakukan `manager.on_message = ...` dan menyimpan callback
-sebelumnya. Target: `EventBus` (Phase 26 di implementation plan).
+sebelumnya. **Selesai di Phase 26 (v1.14.0)**: Digantikan oleh `EventBus` (`core/events.py`)
+dengan typed events (`NetworkMessageReceived`, `ChatReceived`, `FileOffered`, dll.).
+Chaining `on_message` dihapus sepenuhnya.
 
 ### ARCH-002 — Identity Masih Berasal dari Payload
 

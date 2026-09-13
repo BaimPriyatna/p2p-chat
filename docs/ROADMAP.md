@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **1.13.1** (see `../CHANGELOG.md` for full detail on every
+Current version: **1.14.0** (see `../CHANGELOG.md` for full detail on every
 release). This file is the scannable status view; `IMPLEMENTATION_PLAN.md`
 has the full per-phase design detail, and `SECURE_STORAGE_DESIGN.md` has
 the detailed design for Phase 39 specifically.
@@ -8,7 +8,7 @@ the detailed design for Phase 39 specifically.
 Versioning policy: `a.b.c` — `c` (PATCH) is a small change/sub-step within
 the current phase; `b` (MINOR) identifies the phase itself and increments
 whenever work moves into a new phase (e.g. Phase 5's sub-steps landed as
-`1.13.0`–`1.13.1`; Phase 26 will open as `1.14.0`); `a` (MAJOR) is bumped
+`1.13.0`–`1.13.1`; Phase 26 landed as `1.14.0`); `a` (MAJOR) is bumped
 only once the whole project is finished — `2.x` marks the shift from active
 development into maintenance/updates, not before.
 
@@ -32,13 +32,14 @@ development into maintenance/updates, not before.
 | `1.12.0` | 41 | `core/security/events.py` [NEW]: `SecuritySeverity` (`INFO`/`WARNING`/`HIGH`/`CRITICAL`), `SecurityEventType`, `SecurityEvent`, `emit()`, listeners, safe credential redaction; call sites in `TrustStore`, `handshake`, `rotation` |
 | `1.13.0` | 5.1 | `discovery.py` wire payload gains `version`/`device_id`/`public_key`; incoming packets checked for `device_id == sha256(public_key)` self-consistency (drop + `AUTH_FAILED` event on mismatch, not a trust decision) |
 | `1.13.1` | 5.2 | `MDNSDiscovery` + `_PeercServiceListener` in `discovery.py`: optional mDNS transport (`_peerc._tcp.local.`, key-value TXT record) via `zeroconf`; `MDNS_AVAILABLE` flag; shared `_handle_packet` path for both UDP and mDNS; `pip install peerc[mdns]` optional dep group |
+| `1.14.0` | 26 | `core/events.py` [NEW]: `EventBus`, typed events (`ChatReceived`, `FileOffered`, `FileProgress`, `TransferCompleted`, `PeerConnected`, `PeerDisconnected`, `TrustRequired`, `SecurityWarning`), security event bridge; resolved ARCH-001 (`on_message` chaining eliminated across `peer.py`, `chat.py`, `file_transfer.py`, `ui.py`) |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
 (Session Keys), Phase 8 (ChaCha20-Poly1305 Encryption), Phase 9
 (Secure Transport Layer), Phase 12–20 (File Transfer V2 + Hardening),
-Phase 40 (Device Key Rotation), and Phase 41 (Security Event Logging)
-are complete.**
+Phase 26 (Event Architecture), Phase 40 (Device Key Rotation), and
+Phase 41 (Security Event Logging) are complete.**
 
 ## Designed, not yet coded
 
@@ -66,13 +67,12 @@ Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
 disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
-1. Phase 26 — Event architecture
-2. **Phase 39 — Secure Storage** (design-complete, see above)
-3. **Phase 42 — Group Authority System** (design-complete)
-4. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)
-5. **Phase 44 — Internet P2P Connectivity** (design-complete)
-6. Phase 45/46 — Rendezvous, NAT Traversal & Relay (optional, design-complete)
-7. Phase 36/37 — UI/security UX
+1. **Phase 39 — Secure Storage** (design-complete, see above)
+2. **Phase 42 — Group Authority System** (design-complete)
+3. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)
+4. **Phase 44 — Internet P2P Connectivity** (design-complete)
+5. Phase 45/46 — Rendezvous, NAT Traversal & Relay (optional, design-complete)
+6. Phase 36/37 — UI/security UX
 8. Phase 28-35 — logging, performance, concurrency, state machines,
    error protocol
 9. Phase 38 — Project structure final (**not done now, deliberately** —

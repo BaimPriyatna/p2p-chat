@@ -45,6 +45,12 @@ from textual.strip import Strip
 from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, RichLog
 
 import chat
+from core.events import (
+    EventBus,
+    NetworkMessageReceived,
+    SecurityWarning,
+    bridge_security_events,
+)
 import core.identity as identity
 import discovery
 import file_transfer
@@ -203,12 +209,13 @@ class ChatApp(App):
         self.display_name: str = ""
         self.public_key_bytes: bytes = b""
         self.registry: Optional[discovery.PeerRegistry] = None
+        self.event_bus: Optional[EventBus] = None
+        self._unhook_security_events = None
         self.manager: Optional[ConnectionManager] = None
         self.chat_session: Optional[chat.ChatSession] = None
         self.file_session: Optional[file_transfer.FileTransferSession] = None
         self.active_peer_id: Optional[str] = None
         self._last_received_msg: str = ""
-        self._next_on_message = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -231,21 +238,28 @@ class ChatApp(App):
         self.registry = discovery.PeerRegistry(
             on_peer_new=self._on_peer_new, on_peer_lost=self._on_peer_lost,
         )
-        self.manager = ConnectionManager(listen_port=UI_TCP_PORT, on_message=None)
+        self.event_bus = EventBus()
+        self._unhook_security_events = bridge_security_events(self.event_bus)
+
+        self.manager = ConnectionManager(listen_port=UI_TCP_PORT, event_bus=self.event_bus)
         self.chat_session = chat.ChatSession(
-            self.manager, on_chat_received=self._on_chat_received,
+            self.manager,
+            event_bus=self.event_bus,
+            on_chat_received=self._on_chat_received,
             on_status_change=self._on_status_change,
         )
         self.file_session = file_transfer.FileTransferSession(
-            self.manager, downloads_dir="downloads",
+            self.manager,
+            downloads_dir="downloads",
+            event_bus=self.event_bus,
             on_offer_received=self._on_offer_received,
             on_progress=self._on_transfer_progress,
             on_complete=self._on_transfer_complete,
         )
 
-        # Wire TCP handshake (hello / hello_ack) on top of file and chat sessions
-        self._next_on_message = self.manager.on_message
-        self.manager.on_message = self._dispatch_handshake
+        # Wire event bus subscribers
+        self.event_bus.subscribe(NetworkMessageReceived, self._on_network_message_handshake)
+        self.event_bus.subscribe(SecurityWarning, self._on_security_warning)
 
         await self.manager.start_server()
         self._discovery = discovery.Discovery(
@@ -298,13 +312,14 @@ class ChatApp(App):
             self._log(f"[cyan]Active peer -> {target_name}[/cyan]")
             self._refresh_peer_list()
 
-    async def _dispatch_handshake(self, addr_key: str, message: dict) -> None:
-        msg_type = message.get("type")
+    async def _on_network_message_handshake(self, evt: NetworkMessageReceived) -> None:
+        msg_type = evt.message.get("type")
+        addr_key = evt.addr_key
         ip = addr_key.rsplit(":", 1)[0]
         if msg_type == "hello":
-            peer_id = message.get("peer_id", "")
-            sender_name = message.get("sender_name", ip)
-            tcp_port = message.get("tcp_port", UI_TCP_PORT)
+            peer_id = evt.message.get("peer_id", "")
+            sender_name = evt.message.get("sender_name", ip)
+            tcp_port = evt.message.get("tcp_port", UI_TCP_PORT)
             if peer_id and peer_id != self.peer_id:
                 self.registry.upsert(peer_id, sender_name, ip, tcp_port)
                 self._refresh_peer_list()
@@ -313,16 +328,19 @@ class ChatApp(App):
                 ack = protocol.make_hello_ack(self.peer_id, self.display_name, UI_TCP_PORT)
                 await self.manager.send(addr_key, ack)
         elif msg_type == "hello_ack":
-            peer_id = message.get("peer_id", "")
-            sender_name = message.get("sender_name", ip)
-            tcp_port = message.get("tcp_port", UI_TCP_PORT)
+            peer_id = evt.message.get("peer_id", "")
+            sender_name = evt.message.get("sender_name", ip)
+            tcp_port = evt.message.get("tcp_port", UI_TCP_PORT)
             if peer_id and peer_id != self.peer_id:
                 self.registry.upsert(peer_id, sender_name, ip, tcp_port)
                 self._refresh_peer_list()
                 if self.active_peer_id is None:
                     self.active_peer_id = peer_id
-        elif self._next_on_message:
-            await self._next_on_message(addr_key, message)
+
+    def _on_security_warning(self, evt: SecurityWarning) -> None:
+        peer_info = f" (peer {evt.peer_id[:8]})" if evt.peer_id else ""
+        color = "red" if evt.severity in ("HIGH", "CRITICAL") else "yellow"
+        self._log(f"[{color}][bold]SECURITY {evt.severity}:[/bold] {evt.event_type}{peer_info}[/{color}]")
 
     async def _prune_ui_loop(self) -> None:
         while True:

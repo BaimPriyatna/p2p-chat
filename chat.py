@@ -14,7 +14,7 @@ The caller decides whether to resend manually.
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import protocol
 from peer import ConnectionManager
@@ -40,16 +40,29 @@ class ChatSession:
         manager: ConnectionManager,
         on_chat_received: Optional[OnChatReceived] = None,
         on_status_change: Optional[OnStatusChange] = None,
+        event_bus: Optional[object] = None,
     ):
         self.manager = manager
         self.on_chat_received = on_chat_received
         self.on_status_change = on_status_change
+        self.event_bus = event_bus or getattr(manager, "event_bus", None)
         self._pending: dict[str, SentMessageState] = {}
 
-        # Wrap the manager's message dispatch so we intercept chat/chat_ack
-        # before/alongside whatever the caller already wired up.
-        self._user_on_message = manager.on_message
-        manager.on_message = self._dispatch
+        if self.event_bus:
+            from core.events import NetworkMessageReceived
+            self.event_bus.subscribe(NetworkMessageReceived, self._on_network_message)
+        else:
+            # Wrap the manager's message dispatch so we intercept chat/chat_ack
+            # before/alongside whatever the caller already wired up (legacy fallback).
+            self._user_on_message = manager.on_message
+            manager.on_message = self._dispatch
+
+    async def _on_network_message(self, evt: Any) -> None:
+        msg_type = evt.message.get("type")
+        if msg_type == "chat":
+            await self._handle_incoming_chat(evt.addr_key, evt.message)
+        elif msg_type == "chat_ack":
+            self._handle_ack(evt.message)
 
     async def _dispatch(self, addr_key: str, message: dict) -> None:
         msg_type = message.get("type")
@@ -60,7 +73,7 @@ class ChatSession:
             self._handle_ack(message)
         else:
             # not ours — pass through to whatever the caller originally set
-            if self._user_on_message:
+            if getattr(self, "_user_on_message", None):
                 await self._user_on_message(addr_key, message)
 
     async def _handle_incoming_chat(self, addr_key: str, message: dict) -> None:
@@ -68,8 +81,34 @@ class ChatSession:
         ack = protocol.make_chat_ack(message["message_id"])
         await self.manager.send(addr_key, ack)
 
+        if self.event_bus:
+            from core.events import ChatReceived
+            await self.event_bus.publish(
+                ChatReceived(
+                    addr_key=addr_key,
+                    sender_id=message.get("sender_id", ""),
+                    sender_name=message.get("sender_name", ""),
+                    text=message.get("text", ""),
+                    message_id=message.get("message_id", ""),
+                    raw_message=message,
+                )
+            )
+
         if self.on_chat_received:
             await self.on_chat_received(addr_key, message)
+
+    def _notify_status(self, message_id: str, status: str, addr_key: str = "") -> None:
+        if self.event_bus:
+            from core.events import ChatMessageStatusChanged
+            self.event_bus.post(
+                ChatMessageStatusChanged(
+                    message_id=message_id,
+                    status=status,
+                    addr_key=addr_key,
+                )
+            )
+        if self.on_status_change:
+            self.on_status_change(message_id, status)
 
     def _handle_ack(self, message: dict) -> None:
         message_id = message.get("message_id")
@@ -78,12 +117,12 @@ class ChatSession:
             return  # ack for something we no longer track (e.g. already timed out)
 
         state.status = "delivered"
+        addr_key = state.addr_key
         if state.timeout_task:
             state.timeout_task.cancel()
         self._pending.pop(message_id, None)
 
-        if self.on_status_change:
-            self.on_status_change(message_id, "delivered")
+        self._notify_status(message_id, "delivered", addr_key)
 
     async def _timeout_watcher(self, message_id: str) -> None:
         try:
@@ -95,8 +134,7 @@ class ChatSession:
         if state is None:
             return  # already resolved
         state.status = "failed"
-        if self.on_status_change:
-            self.on_status_change(message_id, "failed")
+        self._notify_status(message_id, "failed", state.addr_key)
 
     async def send_chat(self, addr_key: str, sender_id: str, sender_name: str, text: str) -> str:
         """Send a chat message and start tracking it for delivery ack.
@@ -110,8 +148,7 @@ class ChatSession:
         if len(text.encode("utf-8", errors="replace")) > protocol.MAX_CHAT_TEXT_SIZE:
             # BUG-021: don't even attempt to send something the receiver's
             # own validate_message() would just reject and disconnect over.
-            if self.on_status_change:
-                self.on_status_change(message_id, "failed")
+            self._notify_status(message_id, "failed", addr_key)
             return message_id
 
         # BUG-022: register the pending/timeout state BEFORE sending, not
@@ -125,8 +162,7 @@ class ChatSession:
         if not ok:
             # Not even connected — report as failed immediately, don't track.
             self._pending.pop(message_id, None)
-            if self.on_status_change:
-                self.on_status_change(message_id, "failed")
+            self._notify_status(message_id, "failed", addr_key)
             return message_id
 
         if message_id not in self._pending:

@@ -1220,7 +1220,7 @@ ikut bocor.
 
 ---
 
-## Phase 26 — UI architecture
+## Phase 26 — UI architecture (Event architecture) [SELESAI - v1.14.0]
 
 Jangan lagi:
 
@@ -1260,6 +1260,10 @@ PeerDisconnected
 TrustRequired
 SecurityWarning
 ```
+
+**Status**: Selesai di v1.14.0 (`core/events.py`, `EventBus`, typed event classes,
+`bridge_security_events`, penghapusan `manager.on_message` chaining di `chat.py`,
+`file_transfer.py`, dan `ui.py`, serta pengujian di `tests/test_event_bus.py`).
 
 ---
 

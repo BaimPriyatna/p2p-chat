@@ -20,7 +20,7 @@ import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 import protocol
 from core.transfer import (
@@ -88,21 +88,41 @@ class FileTransferSession:
         on_offer_received: Optional[OnOfferReceived] = None,
         on_progress: Optional[OnProgress] = None,
         on_complete: Optional[OnComplete] = None,
+        event_bus: Optional[object] = None,
     ):
         self.manager = manager
         self.downloads_dir = downloads_dir
         self.on_offer_received = on_offer_received
         self.on_progress = on_progress
         self.on_complete = on_complete
+        self.event_bus = event_bus or getattr(manager, "event_bus", None)
 
         os.makedirs(downloads_dir, exist_ok=True)
 
         self._outgoing: dict[str, OutgoingTransfer] = {}
         self._incoming: dict[str, IncomingTransfer] = {}
 
-        # Chain onto whatever dispatcher is already set (e.g. ChatSession's).
-        self._next_on_message = manager.on_message
-        manager.on_message = self._dispatch
+        if self.event_bus:
+            from core.events import NetworkMessageReceived
+            self.event_bus.subscribe(NetworkMessageReceived, self._on_network_message)
+        else:
+            # Chain onto whatever dispatcher is already set (e.g. ChatSession's) — legacy fallback.
+            self._next_on_message = manager.on_message
+            manager.on_message = self._dispatch
+
+    async def _on_network_message(self, evt: Any) -> None:
+        msg_type = evt.message.get("type")
+        handlers = {
+            "file_offer": self._handle_offer,
+            "file_accept": self._handle_accept,
+            "file_reject": self._handle_reject,
+            "file_data": self._handle_chunk,
+            "file_done": self._handle_done,
+            "file_complete_ack": self._handle_complete_ack,
+        }
+        handler = handlers.get(msg_type)
+        if handler:
+            await handler(evt.addr_key, evt.message)
 
     async def _dispatch(self, addr_key: str, message: dict) -> None:
         msg_type = message.get("type")
@@ -117,8 +137,42 @@ class FileTransferSession:
         handler = handlers.get(msg_type)
         if handler:
             await handler(addr_key, message)
-        elif self._next_on_message:
+        elif getattr(self, "_next_on_message", None):
             await self._next_on_message(addr_key, message)
+
+    def _notify_progress(self, transfer_id: str, done: int, total: int, is_upload: bool = False) -> None:
+        if self.event_bus:
+            from core.events import FileProgress
+            self.event_bus.post(
+                FileProgress(
+                    transfer_id=transfer_id,
+                    bytes_transferred=done,
+                    total_bytes=total,
+                    is_upload=is_upload,
+                )
+            )
+        if self.on_progress:
+            self.on_progress(transfer_id, done, total)
+
+    def _notify_complete(
+        self,
+        transfer_id: str,
+        success: bool,
+        filepath: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        if self.event_bus:
+            from core.events import TransferCompleted
+            self.event_bus.post(
+                TransferCompleted(
+                    transfer_id=transfer_id,
+                    success=success,
+                    filepath=filepath,
+                    error=error,
+                )
+            )
+        if self.on_complete:
+            self.on_complete(transfer_id, success, filepath)
 
     # ---- Sender side -------------------------------------------------
 
@@ -157,8 +211,7 @@ class FileTransferSession:
         if transfer is None:
             return
         transfer.status = "rejected"
-        if self.on_complete:
-            self.on_complete(transfer.transfer_id, False, None)
+        self._notify_complete(transfer.transfer_id, False, None, error="rejected")
         self._outgoing.pop(transfer.transfer_id, None)
 
     async def _send_chunks(self, transfer: OutgoingTransfer) -> None:
@@ -169,12 +222,10 @@ class FileTransferSession:
                 ok = await self.manager.send_binary(transfer.addr_key, payload)
                 if not ok:
                     transfer.status = "failed"
-                    if self.on_complete:
-                        self.on_complete(transfer.transfer_id, False, None)
+                    self._notify_complete(transfer.transfer_id, False, None, error="send_failed")
                     return
                 bytes_sent += len(chunk)
-                if self.on_progress:
-                    self.on_progress(transfer.transfer_id, bytes_sent, transfer.size)
+                self._notify_progress(transfer.transfer_id, bytes_sent, transfer.size, is_upload=True)
 
             done = protocol.make_file_done(transfer.transfer_id, transfer.checksum)
             await self.manager.send(transfer.addr_key, done)
@@ -187,12 +238,15 @@ class FileTransferSession:
                 success = False
 
             transfer.status = "done" if success else "failed"
-            if self.on_complete:
-                self.on_complete(transfer.transfer_id, success, transfer.filepath if success else None)
+            self._notify_complete(
+                transfer.transfer_id,
+                success,
+                transfer.filepath if success else None,
+                error=None if success else "ack_failed_or_timeout",
+            )
         except OSError:
             transfer.status = "failed"
-            if self.on_complete:
-                self.on_complete(transfer.transfer_id, False, None)
+            self._notify_complete(transfer.transfer_id, False, None, error="os_error")
         finally:
             self._outgoing.pop(transfer.transfer_id, None)
 
@@ -228,6 +282,20 @@ class FileTransferSession:
         except PathTraversalError:
             await self.manager.send(addr_key, protocol.make_file_reject(transfer_id))
             return
+
+        if self.event_bus:
+            from core.events import FileOffered
+            await self.event_bus.publish(
+                FileOffered(
+                    transfer_id=transfer_id,
+                    addr_key=addr_key,
+                    filename=filename,
+                    size=size,
+                    checksum=checksum,
+                    sender_name=sender_name,
+                    sender_id=message.get("sender_id", ""),
+                )
+            )
 
         accept = True
         if self.on_offer_received:
@@ -283,8 +351,7 @@ class FileTransferSession:
         transfer.bytes_received += len(data)
         transfer.expected_chunk_index += 1
 
-        if self.on_progress:
-            self.on_progress(transfer.transfer_id, transfer.bytes_received, transfer.size)
+        self._notify_progress(transfer.transfer_id, transfer.bytes_received, transfer.size, is_upload=False)
 
     async def _abort_incoming(self, transfer: "IncomingTransfer", reason: str) -> None:
         self._incoming.pop(transfer.transfer_id, None)
@@ -306,8 +373,7 @@ class FileTransferSession:
             transfer.addr_key,
             protocol.make_file_complete_ack(transfer.transfer_id, False, reason),
         )
-        if self.on_complete:
-            self.on_complete(transfer.transfer_id, False, None)
+        self._notify_complete(transfer.transfer_id, False, None, error=reason)
 
     async def _handle_done(self, addr_key: str, message: dict) -> None:
         transfer = self._incoming.pop(message["transfer_id"], None)
@@ -329,13 +395,11 @@ class FileTransferSession:
         if not success:
             transfer.status = "failed"
             cleanup_part_file(transfer.part_path)
-            if self.on_complete:
-                self.on_complete(transfer.transfer_id, False, None)
+            self._notify_complete(transfer.transfer_id, False, None, error="checksum_mismatch")
             return
 
         # Atomically rename .part to final dest_path
         finalize_part_file(transfer.part_path, transfer.dest_path)
 
         transfer.status = "done"
-        if self.on_complete:
-            self.on_complete(transfer.transfer_id, True, transfer.dest_path)
+        self._notify_complete(transfer.transfer_id, True, transfer.dest_path)

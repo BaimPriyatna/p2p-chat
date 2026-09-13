@@ -5,6 +5,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.14.0] — Phase 26: Event Architecture
+
+### Added
+- **Phase 26 — Event Architecture** (`core/events.py`, `core/__init__.py`, `tests/test_event_bus.py`):
+  - **`EventBus`**: Central decoupled asynchronous event dispatcher supporting typed subscriptions, subtype polymorphism (subscribing to `Event` receives all subtypes), wildcard subscriptions (`subscribe_all`), sync and async handler callbacks, subscriber exception isolation, and async context manager testing (`bus.capture()`).
+  - **Typed Event Classes**:
+    - `ChatReceived`: Incoming chat messages with parsed metadata and payload.
+    - `ChatMessageStatusChanged`: Outgoing message status transitions (`sent`, `delivered`, `failed`).
+    - `FileOffered`: Incoming file transfer offers.
+    - `FileProgress`: Real-time upload and download progress with percentage calculation.
+    - `TransferCompleted`: Final status of file transfers with error diagnostics.
+    - `PeerConnected`: Transport connection establishment notifications.
+    - `PeerDisconnected`: Connection drop notifications.
+    - `TrustRequired`: Notifications when peer authentication requires trust confirmation.
+    - `SecurityWarning`: Bridge event for security alerts at `WARNING` or higher severity.
+    - `NetworkMessageReceived`: Raw framed transport messages parsed from the wire.
+  - **Security Bridge** (`bridge_security_events`): Automatically hooks into `core.security.events`, filtering and projecting `SecurityEvent` instances of `WARNING`+ severity into `SecurityWarning` events on the bus.
+  - **Comprehensive Test Suite** (`tests/test_event_bus.py`): 9 unit and integration tests covering pub/sub, error isolation, polymorphic dispatch, security bridging, and multi-session integration.
+
+### Changed
+- **Resolved ARCH-001 (`on_message` handler chaining)**:
+  - `ConnectionManager` (`peer.py`) now accepts an optional `event_bus` and emits `PeerConnected`, `PeerDisconnected`, and `NetworkMessageReceived`. Legacy `on_message` callback remains supported for backward compatibility.
+  - `ChatSession` (`chat.py`) subscribes to `NetworkMessageReceived` and dispatches `ChatReceived` and `ChatMessageStatusChanged` without modifying `manager.on_message`.
+  - `FileTransferSession` (`file_transfer.py`) subscribes to `NetworkMessageReceived` and dispatches `FileOffered`, `FileProgress`, and `TransferCompleted` without modifying `manager.on_message`.
+  - `ChatApp` (`ui.py`) uses `EventBus` to bind transport, chat, file transfer, and security warnings, completely removing `on_message` callback mutation.
+
 ## [1.13.1] — Phase 5.2: mDNS Discovery (Phase 5 complete)
 
 ### Added
