@@ -1,17 +1,16 @@
 # Roadmap
 
-Current version: **1.13.0** (see `../CHANGELOG.md` for full detail on every
+Current version: **1.13.1** (see `../CHANGELOG.md` for full detail on every
 release). This file is the scannable status view; `IMPLEMENTATION_PLAN.md`
 has the full per-phase design detail, and `SECURE_STORAGE_DESIGN.md` has
 the detailed design for Phase 39 specifically.
 
 Versioning policy: `a.b.c` — `c` (PATCH) is a small change/sub-step within
 the current phase; `b` (MINOR) identifies the phase itself and increments
-whenever work moves into a new phase (e.g. Phase 5's first sub-step
-landed as `1.13.0`; its remaining sub-steps land as `1.13.1`, `1.13.2`,
-...); `a` (MAJOR) is bumped only once the whole project is finished —
-`2.x` marks the shift from active development into maintenance/updates,
-not before.
+whenever work moves into a new phase (e.g. Phase 5's sub-steps landed as
+`1.13.0`–`1.13.1`; Phase 26 will open as `1.14.0`); `a` (MAJOR) is bumped
+only once the whole project is finished — `2.x` marks the shift from active
+development into maintenance/updates, not before.
 
 ## Done
 
@@ -32,12 +31,14 @@ not before.
 | `1.11.0` | 40 | `core/identity/rotation.py` [NEW]: `TransitionCertificate`, `create_transition_certificate`, `verify_transition_certificate`; `rotate_identity()` in `identity_file.py`; `identity_transitions` table + `record_rotation`/`get_rotation_chain`/`check_with_rotation` in `TrustStore` |
 | `1.12.0` | 41 | `core/security/events.py` [NEW]: `SecuritySeverity` (`INFO`/`WARNING`/`HIGH`/`CRITICAL`), `SecurityEventType`, `SecurityEvent`, `emit()`, listeners, safe credential redaction; call sites in `TrustStore`, `handshake`, `rotation` |
 | `1.13.0` | 5.1 | `discovery.py` wire payload gains `version`/`device_id`/`public_key`; incoming packets checked for `device_id == sha256(public_key)` self-consistency (drop + `AUTH_FAILED` event on mismatch, not a trust decision) |
+| `1.13.1` | 5.2 | `MDNSDiscovery` + `_PeercServiceListener` in `discovery.py`: optional mDNS transport (`_peerc._tcp.local.`, key-value TXT record) via `zeroconf`; `MDNS_AVAILABLE` flag; shared `_handle_packet` path for both UDP and mDNS; `pip install peerc[mdns]` optional dep group |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
-Store), Phase 6 (Secure Handshake), Phase 7 (Session Keys), Phase 8
-(ChaCha20-Poly1305 Encryption), Phase 9 (Secure Transport Layer),
-Phase 12–20 (File Transfer V2 + Hardening), Phase 40 (Device Key
-Rotation), and Phase 41 (Security Event Logging) are complete.**
+Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
+(Session Keys), Phase 8 (ChaCha20-Poly1305 Encryption), Phase 9
+(Secure Transport Layer), Phase 12–20 (File Transfer V2 + Hardening),
+Phase 40 (Device Key Rotation), and Phase 41 (Security Event Logging)
+are complete.**
 
 ## Designed, not yet coded
 
@@ -65,19 +66,18 @@ Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
 disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
-1. Phase 5 — Discovery V2 ← in progress (5.1 protocol fields done in `1.13.0`; 5.2 mDNS next, will land as `1.13.1`)
-2. Phase 26 — Event architecture
-4. **Phase 39 — Secure Storage** (design-complete, see above)
-5. **Phase 42 — Group Authority System** (design-complete)
-6. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)
-7. **Phase 44 — Internet P2P Connectivity** (design-complete)
-8. Phase 45/46 — Rendezvous, NAT Traversal & Relay (optional, design-complete)
-9. Phase 36/37 — UI/security UX
-10. Phase 28-35 — logging, performance, concurrency, state machines,
-    error protocol
-11. Phase 38 — Project structure final (**not done now, deliberately** —
-    see note below)
-12. Security audit, release
+1. Phase 26 — Event architecture
+2. **Phase 39 — Secure Storage** (design-complete, see above)
+3. **Phase 42 — Group Authority System** (design-complete)
+4. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)
+5. **Phase 44 — Internet P2P Connectivity** (design-complete)
+6. Phase 45/46 — Rendezvous, NAT Traversal & Relay (optional, design-complete)
+7. Phase 36/37 — UI/security UX
+8. Phase 28-35 — logging, performance, concurrency, state machines,
+   error protocol
+9. Phase 38 — Project structure final (**not done now, deliberately** —
+   see note below)
+10. Security audit, release
 
 ## Why Phase 38 (final project structure) isn't done yet
 

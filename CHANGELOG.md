@@ -5,7 +5,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-## [1.13.0] — Phase 5.1: Discovery V2 protocol fields (Phase 5 begins)
+## [1.13.1] — Phase 5.2: mDNS Discovery (Phase 5 complete)
+
+### Added
+- **Phase 5.2 — mDNS Discovery** (`discovery.py`, `pyproject.toml`,
+  `tests/test_discovery.py`):
+  - **`MDNSDiscovery`** class: advertises this device as
+    `<device_id[:16]>._peerc._tcp.local.` and browses for peers using
+    the `zeroconf` library.  TXT record carries key-value fields
+    (`version`, `device_id`, `public_key`, `name`, `tcp_port`) — all
+    inspectable with `avahi-browse`/`dns-sd`, unlike an opaque blob.
+  - **`_PeercServiceListener`**: zeroconf `ServiceListener` that resolves
+    discovered mDNS services and feeds them into `Discovery._handle_packet()`
+    as synthetic UDP-format packets — **no duplicate validation logic**.
+    Both UDP broadcast and mDNS announce packets go through exactly the same
+    device_id/public_key self-consistency and field-validation code path.
+  - **`MDNS_AVAILABLE`** flag (`bool`): `True` when `zeroconf` is installed,
+    `False` otherwise.  When `False`, `Discovery.run()` logs an `INFO`
+    message and continues with UDP broadcast only — mDNS is **optional**.
+  - **`_build_mdns_txt()`** / **`_mdns_txt_to_packet()`** / **`_safe_int()`**
+    helper functions; `get_network_info()` now includes `mdns_available`.
+  - `Discovery.run()` now runs an `_mdns_loop()` coroutine in parallel with
+    the existing announce/listen/prune loops when `MDNS_AVAILABLE is True`.
+    TTL is refreshed every `MDNS_ANNOUNCE_INTERVAL` (10 s) seconds.  mDNS
+    `reply=False` so it never triggers the UDP unicast bi-directional reply.
+  - **`pyproject.toml`**: optional dependency group
+    `[project.optional-dependencies] mdns = ["zeroconf>=0.131"]`.
+    Install with `pip install peerc[mdns]`.  Core install unchanged.
+  - **`tests/test_discovery.py`** extended with 9 new Phase 5.2 tests
+    (items 8–14 in module docstring): `MDNS_AVAILABLE` type, TXT shape,
+    name truncation, valid/mismatch/wrong-version packet handling via the
+    shared `_handle_packet` path, `reply=False` invariant,
+    `get_network_info` key, and `Discovery.run()` task count via
+    monkeypatching (no real sockets required; existing 5.1 tests unchanged).
+
 
 ### Added
 - **Phase 5.1 — Discovery V2 protocol fields** (`discovery.py`, `ui.py`):
