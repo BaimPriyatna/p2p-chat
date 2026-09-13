@@ -1,6 +1,6 @@
 # Roadmap
 
-Current version: **1.14.0** (see `../CHANGELOG.md` for full detail on every
+Current version: **1.15.0** (see `../CHANGELOG.md` for full detail on every
 release). This file is the scannable status view; `IMPLEMENTATION_PLAN.md`
 has the full per-phase design detail, and `SECURE_STORAGE_DESIGN.md` has
 the detailed design for Phase 39 specifically.
@@ -33,6 +33,7 @@ development into maintenance/updates, not before.
 | `1.13.0` | 5.1 | `discovery.py` wire payload gains `version`/`device_id`/`public_key`; incoming packets checked for `device_id == sha256(public_key)` self-consistency (drop + `AUTH_FAILED` event on mismatch, not a trust decision) |
 | `1.13.1` | 5.2 | `MDNSDiscovery` + `_PeercServiceListener` in `discovery.py`: optional mDNS transport (`_peerc._tcp.local.`, key-value TXT record) via `zeroconf`; `MDNS_AVAILABLE` flag; shared `_handle_packet` path for both UDP and mDNS; `pip install peerc[mdns]` optional dep group |
 | `1.14.0` | 26 | `core/events.py` [NEW]: `EventBus`, typed events (`ChatReceived`, `FileOffered`, `FileProgress`, `TransferCompleted`, `PeerConnected`, `PeerDisconnected`, `TrustRequired`, `SecurityWarning`), security event bridge; resolved ARCH-001 (`on_message` chaining eliminated across `peer.py`, `chat.py`, `file_transfer.py`, `ui.py`) |
+| `1.15.0` | 39.1 | `core/vault/` [NEW]: DEK/KEK envelope encryption (`crypto.py` — Scrypt KDF + AES-256-GCM wrap/unwrap), `vault_keyfile.json` format + `create_vault`/`unlock_with_passphrase`/`unlock_with_recovery_code`/`change_passphrase` (`keyfile.py`), Crockford Base32 recovery code (`recovery_code.py`) |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 5 (Discovery V2), Phase 6 (Secure Handshake), Phase 7
@@ -45,7 +46,7 @@ Phase 41 (Security Event Logging) are complete.**
 
 | Phase | What | Where |
 |---|---|---|
-| 39 | Secure Storage (at-rest encryption: passphrase/recovery-code envelope encryption, encrypted vault DB, secure/normal file storage, viewer-cache mitigation) | `SECURE_STORAGE_DESIGN.md` — architecture and every implementation-level detail (schema, key formats, nonce handling, DB lifecycle) fully resolved |
+| 39 | Secure Storage (at-rest encryption: passphrase/recovery-code envelope encryption, encrypted vault DB, secure/normal file storage, viewer-cache mitigation) — **in progress: 39.1 (envelope encryption core) done in `1.15.0`** | `SECURE_STORAGE_DESIGN.md` — architecture and every implementation-level detail (schema, key formats, nonce handling, DB lifecycle) fully resolved |
 | 42 | Group Authority System (admin-managed membership, policy enforced in core, multi-admin threshold signatures, audit log) | `GROUP_AUTHORITY_DESIGN.md` |
 | 43 | Group-Gated Export Authorization (admin capability AND personal critical-action key, not either/or) | `GROUP_AUTHORITY_DESIGN.md` §Export Authorization |
 | 44 | Internet P2P Connectivity (Identity/Locator separation, signed Endpoint Update) | `INTERNET_CONNECTIVITY_DESIGN.md` |
@@ -67,7 +68,7 @@ Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
 disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
-1. **Phase 39 — Secure Storage** (design-complete, see above)
+1. **Phase 39 — Secure Storage** ← in progress (39.1 envelope encryption core done in `1.15.0`; 39.2 encrypted DB lifecycle next, will land as `1.15.1`)
 2. **Phase 42 — Group Authority System** (design-complete)
 3. Phase 43 — Group-Gated Export Authorization (design-complete, depends on 39+42)
 4. **Phase 44 — Internet P2P Connectivity** (design-complete)

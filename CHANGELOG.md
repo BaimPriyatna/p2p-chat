@@ -5,6 +5,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.15.0] — Phase 39.1: Vault Envelope Encryption (Phase 39 begins)
+
+### Added
+- **`core/vault/`** [NEW] — envelope-encryption core for Secure Storage,
+  per `docs/SECURE_STORAGE_DESIGN.md` §2/§3/§13–§16:
+  - `crypto.py`: Scrypt KDF (`derive_kek`, N=131072/r=8/p=1 per RFC 7914's
+    interactive-use recommendation) and AES-256-GCM `wrap_dek`/`unwrap_dek`
+    (fresh random 12-byte nonce every call; GCM's own auth tag is the
+    "wrong passphrase" verifier — no separate verifier hash stored).
+  - `recovery_code.py`: Crockford Base32 recovery code (20 random bytes,
+    grouped-with-dashes display, trailing checksum character; O/I/L
+    transcription-mistake normalization on input).
+  - `keyfile.py`: `VaultKeyfile` dataclass matching the documented
+    `vault_keyfile.json` schema; `create_vault()` (first-time setup,
+    returns the recovery code exactly once, never stored),
+    `unlock_with_passphrase()`, `unlock_with_recovery_code()`,
+    `change_passphrase()` (re-wraps the DEK only, nothing else touched),
+    `save_vault_keyfile()`/`load_vault_keyfile()` (atomic write-temp-
+    then-rename), `validate_passphrase()` (§14: 8-char minimum only, no
+    forced complexity, rejects empty or same-as-device-name).
+  - Default path `~/.peerc/vault_keyfile.json` — same convention as
+    `core/identity/identity_file.py`'s `DEFAULT_IDENTITY_DIR`
+    (`os.path.expanduser`, portable across Linux/macOS/Windows without a
+    new dependency).
+  - No new dependency — `cryptography` (already required since Phase 3)
+    covers both Scrypt and AES-GCM.
+  - **`tests/test_vault.py`** [NEW]: 17 tests — create/unlock roundtrip
+    (passphrase and recovery code), wrong passphrase rejected, mistyped
+    recovery-code checksum rejected before the KDF, a well-formed-but-
+    wrong recovery code still rejected at unwrap, change-passphrase
+    roundtrip (DEK unchanged, old passphrase stops working), passphrase
+    validation rejections, duplicate `create_vault()` rejected,
+    save/load roundtrip, atomic-write cleanup, recovery-code
+    normalization (lowercase/dashes/ambiguous-character substitution).
+  - **Not yet done (Phase 39.2, next sub-step):** encrypted database
+    lifecycle (tmpfs unlock/flush/lock), unified schema absorbing Phase
+    27 (`messages`/`transfers`/`settings`) plus migrating Phase 4's
+    plaintext `trust.db` into it.
+
 ## [1.14.0] — Phase 26: Event Architecture
 
 ### Added
