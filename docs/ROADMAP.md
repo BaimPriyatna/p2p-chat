@@ -1,12 +1,17 @@
 # Roadmap
 
-Current version: **1.12.0** (see `../CHANGELOG.md` for full detail on every
+Current version: **1.13.0** (see `../CHANGELOG.md` for full detail on every
 release). This file is the scannable status view; `IMPLEMENTATION_PLAN.md`
 has the full per-phase design detail, and `SECURE_STORAGE_DESIGN.md` has
 the detailed design for Phase 39 specifically.
 
-Versioning policy: PATCH per completed sub-step within a phase, MINOR
-when a whole phase completes, MAJOR deferred (no external users yet).
+Versioning policy: `a.b.c` — `c` (PATCH) is a small change/sub-step within
+the current phase; `b` (MINOR) identifies the phase itself and increments
+whenever work moves into a new phase (e.g. Phase 5's first sub-step
+landed as `1.13.0`; its remaining sub-steps land as `1.13.1`, `1.13.2`,
+...); `a` (MAJOR) is bumped only once the whole project is finished —
+`2.x` marks the shift from active development into maintenance/updates,
+not before.
 
 ## Done
 
@@ -26,6 +31,7 @@ when a whole phase completes, MAJOR deferred (no external users yet).
 | `1.10.0` | 12/13–20 | `core/transfer/`: modular File Transfer V2 (streaming SHA-256, chunker, `.part` resume, atomic rename, pre-flight disk check, limits) |
 | `1.11.0` | 40 | `core/identity/rotation.py` [NEW]: `TransitionCertificate`, `create_transition_certificate`, `verify_transition_certificate`; `rotate_identity()` in `identity_file.py`; `identity_transitions` table + `record_rotation`/`get_rotation_chain`/`check_with_rotation` in `TrustStore` |
 | `1.12.0` | 41 | `core/security/events.py` [NEW]: `SecuritySeverity` (`INFO`/`WARNING`/`HIGH`/`CRITICAL`), `SecurityEventType`, `SecurityEvent`, `emit()`, listeners, safe credential redaction; call sites in `TrustStore`, `handshake`, `rotation` |
+| `1.13.0` | 5.1 | `discovery.py` wire payload gains `version`/`device_id`/`public_key`; incoming packets checked for `device_id == sha256(public_key)` self-consistency (drop + `AUTH_FAILED` event on mismatch, not a trust decision) |
 
 **Phase 1 (Protocol V2), Phase 3 (Device Identity), Phase 4 (Trust
 Store), Phase 6 (Secure Handshake), Phase 7 (Session Keys), Phase 8
@@ -59,7 +65,7 @@ Straight from `IMPLEMENTATION_PLAN.md`'s "Urutan implementasi yang
 disarankan" — this is the order that makes sense to build in, not the
 numeric phase order in the plan doc:
 
-1. Phase 5 — Discovery V2 ← next
+1. Phase 5 — Discovery V2 ← in progress (5.1 protocol fields done in `1.13.0`; 5.2 mDNS next, will land as `1.13.1`)
 2. Phase 26 — Event architecture
 4. **Phase 39 — Secure Storage** (design-complete, see above)
 5. **Phase 42 — Group Authority System** (design-complete)

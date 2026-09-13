@@ -5,6 +5,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.13.0] — Phase 5.1: Discovery V2 protocol fields (Phase 5 begins)
+
+### Added
+- **Phase 5.1 — Discovery V2 protocol fields** (`discovery.py`, `ui.py`):
+  - Broadcast payload now carries `version` (`PROTOCOL_VERSION = 2`),
+    `device_id` (renamed from `peer_id` on the wire; internal Python
+    attribute name unchanged for backward compat with `chat.py`/`peer.py`/
+    `ui.py`), and the sender's raw Ed25519 `public_key` (base64), per
+    `docs/IMPLEMENTATION_PLAN.md` Phase 5's wire spec.
+  - **Self-consistency validation** on every incoming packet: `public_key`
+    must base64-decode to exactly 32 bytes, and
+    `device_id == sha256(public_key)` must hold, or the packet is dropped.
+    This is explicitly *not* a trust decision (discovery never was, and
+    still isn't, authentication) — it only rejects packets that lie about
+    which key backs their claimed device_id. Real trust decisions remain
+    with `core/trust/` at Phase 6 handshake time.
+  - Mismatched self-consistency emits an `AUTH_FAILED` (WARNING)
+    `SecurityEvent` via the Phase 41 logging infra; malformed fields
+    (bad base64, wrong length) and version mismatches are dropped
+    silently, matching the existing BUG-023 field-validation behavior.
+  - `Peer` dataclass gained a `public_key: bytes` field; `PeerRegistry.upsert()`
+    and `Discovery.__init__()` accept/thread it through so it's available
+    for later phases (e.g. Phase 6 handshake) without another discovery
+    round-trip.
+  - `ui.py` now fetches the local device's public key (via
+    `core.identity.load_or_create_identity()`) and passes it into
+    `Discovery`.
+  - **`tests/test_discovery.py`** [NEW]: 9 tests covering payload shape,
+    valid self-consistent packets, device_id/public_key mismatch (dropped
+    + event emitted), malformed public_key, version mismatch, own-broadcast
+    ignore, and a BUG-023 regression check.
+  - `tests/test_upgrade_fixes.py::test_discovery_packet_validation` updated
+    to the new wire shape (`device_id` + real keypairs) so it keeps
+    exercising the original BUG-023 field checks rather than failing on
+    the unrelated protocol-version/self-consistency checks.
+  - **Not yet done (Phase 5.2, next sub-step — will land as `1.13.1`):**
+    mDNS as a second discovery transport alongside UDP broadcast and
+    manual `/connect`.
+
 ## [1.12.0] — Phase 41 complete: Security Event Logging
 
 ### Added

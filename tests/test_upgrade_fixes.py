@@ -59,15 +59,36 @@ async def test_connection_limit():
 
 
 def test_discovery_packet_validation():
-    registry = discovery.PeerRegistry()
-    d = discovery.Discovery(peer_id="me", name="Me", tcp_port=5656, registry=registry)
-
+    # Phase 5.1: wire format renamed peer_id -> device_id and added
+    # version + public_key fields (IMPLEMENTATION_PLAN.md "Phase 5 —
+    # Discovery V2"). This test still exercises the original BUG-023
+    # field validation (name/tcp_port), just on the current wire shape —
+    # see tests/test_discovery.py for the Phase 5.1-specific coverage
+    # (version mismatch, public_key self-consistency, malformed keys).
+    import base64
     import json
+
+    from core.identity.device_identity import generate_keypair
+
+    registry = discovery.PeerRegistry()
+    me_keypair = generate_keypair()
+    d = discovery.Discovery(
+        peer_id=me_keypair.device_id, name="Me", tcp_port=5656, registry=registry,
+        public_key=me_keypair.public_key_bytes(),
+    )
+
+    attacker_keypair = generate_keypair()
+    attacker_pubkey_b64 = base64.b64encode(attacker_keypair.public_key_bytes()).decode("ascii")
+
     bad_packets = [
-        {"type": "announce", "peer_id": 123, "tcp_port": 5656},   # non-string peer_id
-        {"type": "announce", "peer_id": "atk", "tcp_port": -999},  # negative port
-        {"type": "announce", "peer_id": "atk", "tcp_port": 999999},  # out of range
-        {"type": "announce", "peer_id": "", "tcp_port": 5656},    # empty peer_id
+        {"type": "announce", "version": 2, "device_id": 123, "public_key": attacker_pubkey_b64,
+         "tcp_port": 5656},  # non-string device_id
+        {"type": "announce", "version": 2, "device_id": attacker_keypair.device_id,
+         "public_key": attacker_pubkey_b64, "tcp_port": -999},  # negative port
+        {"type": "announce", "version": 2, "device_id": attacker_keypair.device_id,
+         "public_key": attacker_pubkey_b64, "tcp_port": 999999},  # out of range
+        {"type": "announce", "version": 2, "device_id": "", "public_key": attacker_pubkey_b64,
+         "tcp_port": 5656},  # empty device_id
         "just a string",
         123,
         None,
@@ -78,7 +99,10 @@ def test_discovery_packet_validation():
 
     assert registry.list_peers() == [], f"malformed discovery packets should never be admitted, got {registry.list_peers()}"
 
-    good = json.dumps({"type": "announce", "peer_id": "atk", "name": "Attacker", "tcp_port": 5656}).encode()
+    good = json.dumps({
+        "type": "announce", "version": 2, "device_id": attacker_keypair.device_id,
+        "public_key": attacker_pubkey_b64, "name": "Attacker", "tcp_port": 5656,
+    }).encode()
     d._handle_packet(good, ("192.168.1.50", 9999))
     assert len(registry.list_peers()) == 1, "a genuinely valid packet should still be admitted"
     print("test_discovery_packet_validation OK — BUG-023 fixed")

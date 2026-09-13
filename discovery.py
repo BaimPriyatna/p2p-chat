@@ -13,9 +13,23 @@ for why a bare UUID isn't good enough (anyone could claim any UUID; a
 device_id is provably tied to the key that backs it). load_or_create_identity()
 below keeps its old (peer_id, name) tuple return shape so chat.py/ui.py/
 peer.py didn't need to change, but what's inside peer_id changed completely.
+
+Phase 5.1 (IMPLEMENTATION_PLAN.md "Phase 5 — Discovery V2"): the wire
+payload now carries a "version" field and the device's raw Ed25519
+public_key alongside device_id, and every incoming packet's device_id is
+checked for self-consistency against its claimed public_key
+(device_id == sha256(public_key)). This is deliberately NOT a trust
+decision — discovery only proves "this announcement is internally
+consistent", never "this device is trusted" (that's core/trust/'s job,
+enforced later at handshake time in Phase 6). A mismatch here means the
+packet is lying about its own identity, so it's dropped and logged as a
+security event; it says nothing about whether a self-consistent peer
+should actually be trusted.
 """
 
 import asyncio
+import base64
+import hashlib
 import json
 import os
 import socket
@@ -24,10 +38,12 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import core.identity as identity
+from core.security import SecurityEvent, SecurityEventType, SecuritySeverity, emit
 
 BROADCAST_PORT = 9999
 ANNOUNCE_INTERVAL = 3.0   # seconds between announces
 PEER_TIMEOUT = 10.0       # seconds of silence before a peer is considered offline
+PROTOCOL_VERSION = 2     # Phase 5.1: discovery payload schema version
 
 
 @dataclass
@@ -36,6 +52,7 @@ class Peer:
     name: str
     ip: str
     tcp_port: int
+    public_key: bytes = b""  # raw Ed25519 public key bytes (Phase 5.1); empty for legacy/unset
     last_seen: float = field(default_factory=time.time)
 
 
@@ -52,11 +69,12 @@ class PeerRegistry:
         self._on_peer_new = on_peer_new
         self._on_peer_lost = on_peer_lost
 
-    def upsert(self, peer_id: str, name: str, ip: str, tcp_port: int) -> None:
+    def upsert(self, peer_id: str, name: str, ip: str, tcp_port: int,
+               public_key: bytes = b"") -> None:
         existing = self._peers.get(peer_id)
         now = time.time()
         if existing is None:
-            self._peers[peer_id] = Peer(peer_id, name, ip, tcp_port, now)
+            self._peers[peer_id] = Peer(peer_id, name, ip, tcp_port, public_key, now)
             if self._on_peer_new:
                 self._on_peer_new(self._peers[peer_id])
         else:
@@ -64,6 +82,8 @@ class PeerRegistry:
             existing.name = name
             existing.ip = ip
             existing.tcp_port = tcp_port
+            if public_key:
+                existing.public_key = public_key
             existing.last_seen = now
 
     def prune_stale(self) -> None:
@@ -209,11 +229,13 @@ def load_or_create_identity(config_path: str = identity.DEFAULT_IDENTITY_FILE) -
 class Discovery:
     """Runs the broadcast announce loop and the listener loop concurrently."""
 
-    def __init__(self, peer_id: str, name: str, tcp_port: int, registry: PeerRegistry):
+    def __init__(self, peer_id: str, name: str, tcp_port: int, registry: PeerRegistry,
+                 public_key: bytes = b""):
         self.peer_id = peer_id
         self.name = name
         self.tcp_port = tcp_port
         self.registry = registry
+        self.public_key = public_key
         self._sock: Optional[socket.socket] = None
         self._send_sock: Optional[socket.socket] = None
 
@@ -235,7 +257,9 @@ class Discovery:
     def _build_payload(self, reply: bool = True) -> bytes:
         return json.dumps({
             "type": "announce",
-            "peer_id": self.peer_id,
+            "version": PROTOCOL_VERSION,
+            "device_id": self.peer_id,
+            "public_key": base64.b64encode(self.public_key).decode("ascii"),
             "name": self.name,
             "tcp_port": self.tcp_port,
             "reply": reply,
@@ -307,13 +331,51 @@ class Discovery:
         if msg.get("type") != "announce":
             return
 
-        # BUG-023: fields were pulled out with bare .get()/indexing and
-        # trusted as-is — a crafted packet with peer_id=123 or
-        # tcp_port=-999 would sail straight into the registry.
-        peer_id = msg.get("peer_id")
-        if not isinstance(peer_id, str) or not peer_id:
+        # Phase 5.1: unversioned or wrong-version packets are a different
+        # (older/newer) protocol speaker, not an attack — drop quietly,
+        # same as any other schema mismatch. The whole network is expected
+        # to upgrade together, per BUG_REPORT.md's discovery notes.
+        if msg.get("version") != PROTOCOL_VERSION:
             return
-        if peer_id == self.peer_id:
+
+        # BUG-023: fields were pulled out with bare .get()/indexing and
+        # trusted as-is — a crafted packet with device_id=123 or
+        # tcp_port=-999 would sail straight into the registry.
+        device_id = msg.get("device_id")
+        if not isinstance(device_id, str) or not device_id:
+            return
+
+        # Phase 5.1: public_key self-consistency check. This does NOT mean
+        # the peer is trusted — it means the packet isn't lying about which
+        # key backs its claimed device_id. Actual trust decisions stay with
+        # core/trust/ at handshake time (Phase 6).
+        public_key_b64 = msg.get("public_key")
+        if not isinstance(public_key_b64, str) or not public_key_b64:
+            return
+        try:
+            public_key_bytes = base64.b64decode(public_key_b64, validate=True)
+        except (ValueError, TypeError):
+            return
+        if len(public_key_bytes) != 32:  # raw Ed25519 public key length
+            return
+        if hashlib.sha256(public_key_bytes).hexdigest() != device_id:
+            emit(
+                SecurityEvent(
+                    event_type=SecurityEventType.AUTH_FAILED,
+                    severity=SecuritySeverity.WARNING,
+                    description=(
+                        f"discovery packet from {addr[0]} claimed device_id "
+                        f"{device_id[:16]}... but it doesn't match sha256(public_key) "
+                        "— dropping as internally inconsistent"
+                    ),
+                    device_id=device_id,
+                    details={"stage": "discovery", "reason": "device_id_pubkey_mismatch",
+                             "source_ip": addr[0]},
+                )
+            )
+            return
+
+        if device_id == self.peer_id:
             return  # ignore our own broadcast
 
         name = msg.get("name", addr[0])
@@ -326,7 +388,8 @@ class Discovery:
             return
 
         ip = addr[0]
-        self.registry.upsert(peer_id=peer_id, name=name, ip=ip, tcp_port=tcp_port)
+        self.registry.upsert(peer_id=device_id, name=name, ip=ip, tcp_port=tcp_port,
+                              public_key=public_key_bytes)
 
         # Bi-directional discovery reply:
         # If the incoming announce permits replies, immediately send a unicast announce back.
@@ -362,10 +425,14 @@ if __name__ == "__main__":
         print(f"[-] Peer offline: {peer.name} ({peer.peer_id[:8]})")
 
     async def _main() -> None:
-        peer_id, name = load_or_create_identity()
+        dev_identity = identity.load_or_create_identity()
+        peer_id, name = dev_identity.device_id, dev_identity.name
         print(f"Starting as {name} ({peer_id[:8]})")
         registry = PeerRegistry(on_peer_new=_on_new, on_peer_lost=_on_lost)
-        discovery = Discovery(peer_id, name, tcp_port=5555, registry=registry)
+        discovery = Discovery(
+            peer_id, name, tcp_port=5555, registry=registry,
+            public_key=dev_identity.keypair.public_key_bytes(),
+        )
         await discovery.run()
 
     try:

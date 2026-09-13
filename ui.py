@@ -45,6 +45,7 @@ from textual.strip import Strip
 from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, RichLog
 
 import chat
+import core.identity as identity
 import discovery
 import file_transfer
 import protocol
@@ -200,6 +201,7 @@ class ChatApp(App):
         super().__init__()
         self.peer_id: str = ""
         self.display_name: str = ""
+        self.public_key_bytes: bytes = b""
         self.registry: Optional[discovery.PeerRegistry] = None
         self.manager: Optional[ConnectionManager] = None
         self.chat_session: Optional[chat.ChatSession] = None
@@ -218,6 +220,12 @@ class ChatApp(App):
 
     async def on_mount(self) -> None:
         self.peer_id, self.display_name = discovery.load_or_create_identity()
+        # Phase 5.1: discovery announces now carry the raw public key so
+        # peers can self-consistency-check device_id == sha256(public_key).
+        # load_or_create_identity() here just re-reads the already-created
+        # identity file (idempotent) — it's the key material discovery's
+        # older (peer_id, name)-only wrapper doesn't expose.
+        self.public_key_bytes = identity.load_or_create_identity().keypair.public_key_bytes()
         self.title = f"peerc — {self.display_name} ({self.peer_id[:8]})"
 
         self.registry = discovery.PeerRegistry(
@@ -242,6 +250,7 @@ class ChatApp(App):
         await self.manager.start_server()
         self._discovery = discovery.Discovery(
             self.peer_id, self.display_name, UI_TCP_PORT, self.registry,
+            public_key=self.public_key_bytes,
         )
         asyncio.create_task(self._discovery.run())
         asyncio.create_task(self._prune_ui_loop())
